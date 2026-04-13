@@ -24,7 +24,7 @@ function logUnknownRecords(records) {
 export function useWebSocket() {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
-  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame } = useAppStore();
+  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames } = useAppStore();
 
   const handleMessage = useCallback(
     (evt) => {
@@ -40,6 +40,30 @@ export function useWebSocket() {
         case 'WELCOME':
           appendLog(`[WS] Server v${payload.version} connected`);
           break;
+
+        case 'HISTORY': {
+          // Sent by server on every (re)connect — rebuilds messages + topology from ring buffer
+          const records = payload.records ?? [];
+          appendLog(`[WS] Replaying ${records.length} record(s) from server history…`);
+          const allFrames = [];
+          const unknowns  = [];
+          for (const rec of records) {
+            try {
+              const bytes = Uint8Array.from(rec.hex.split(' ').map((b) => parseInt(b, 16)));
+              const { frames } = parseCpdFile(bytes.buffer);
+              for (const frame of frames) {
+                allFrames.push(frame);
+                if (isUndecodedMessage(frame.header)) {
+                  unknowns.push(buildUnknownRecord(frame, 'serial'));
+                }
+              }
+            } catch { /* skip malformed record */ }
+          }
+          setMessages(allFrames);
+          replayFrames(allFrames);
+          if (unknowns.length) logUnknownRecords(unknowns);
+          break;
+        }
 
         case 'PONG':
           // heartbeat ack – silently ignore
@@ -102,7 +126,7 @@ export function useWebSocket() {
           appendLog(`[WS] Unknown type: ${payload.type}`);
       }
     },
-    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump]
+    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump, clearMessages, setMessages, replayFrames]
   );
 
   const connect = useCallback(() => {

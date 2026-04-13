@@ -62,6 +62,60 @@ let activePort   = null;   // SerialPort instance
 let activeParser = null;   // CpdStreamParser instance
 let serialStatus = { connected: false, port: null, baudRate: null };
 
+// ----- CPD record history (ring buffer for browser reload replay) -----
+const MAX_HISTORY = 5000;
+const recordHistory = [];  // Array of { hex: string, ts: number }
+
+// ----- Session .cpd file save (one timestamped file per session) -----
+let sessionFileStream = null;  // current fs.WriteStream
+let sessionFilePath   = null;  // current file path
+
+/** Generate a timestamped filename: logs/session_YYYY-MM-DDTHH-MM-SS.cpd */
+function makeSessionPath() {
+  const now = new Date();
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
+  const stamp = [
+    now.getFullYear(),
+    '-', pad(now.getMonth() + 1),
+    '-', pad(now.getDate()),
+    'T', pad(now.getHours()),
+    '-', pad(now.getMinutes()),
+    '-', pad(now.getSeconds()),
+  ].join('');
+  return path.join(LOGS_DIR, `session_${stamp}.cpd`);
+}
+
+/** Detect event type from a raw CPD frame Buffer.
+ *  Dir=0x03 (EVENT), SopQual: 0x01=DETACHED, 0x02=ATTACHED */
+function cpdEventType(buf) {
+  if (buf.length < 14) return null;
+  if (buf[7] !== 0x03) return null;  // not an EVENT frame
+  if (buf[13] === 0x01) return 'DETACHED';
+  if (buf[13] === 0x02) return 'ATTACHED';
+  return null;
+}
+
+/** Close current session file (if any) and open a new timestamped one. */
+function openSessionFile() {
+  if (sessionFileStream) {
+    try { sessionFileStream.end(); } catch (_) {}
+    sessionFileStream = null;
+  }
+  sessionFilePath   = makeSessionPath();
+  sessionFileStream = fs.createWriteStream(sessionFilePath, { flags: 'w' });
+  sessionFileStream.on('error', (e) => console.error('[CPD] File write error:', e.message));
+  console.log(`[CPD] New session file: ${path.basename(sessionFilePath)}`);
+}
+
+/** Close current session and start a new one (called on connect/disconnect/DETACHED). */
+function resetSessionFile() {
+  openSessionFile();
+  console.log('[CPD] Session file rotated');
+}
+
+// Open initial session file on startup
+openSessionFile();
+
 // ----- Port list hotplug polling -----
 let _lastPortsKey = '';   // JSON fingerprint of last port list
 let _cachedPorts  = [];   // last known port list
@@ -105,11 +159,18 @@ function disconnectSerial(reason) {
   }
   serialStatus = { connected: false, port: null, baudRate: null };
   console.log(`[Serial] Disconnected${reason ? ` (${reason})` : ''}`);
+  // Flush history so next session starts clean
+  recordHistory.length = 0;
+  resetSessionFile();
   broadcastSerialStatus();
 }
 
 function connectSerial(portPath, baudRate) {
   if (activePort) disconnectSerial('superseded');
+
+  // Flush history on every new connection
+  recordHistory.length = 0;
+  resetSessionFile();
 
   const sp = new SerialPort({ path: portPath, baudRate, autoOpen: false });
   const parser = new CpdStreamParser();
@@ -137,10 +198,26 @@ function connectSerial(portPath, baudRate) {
 
     sp.pipe(parser);
 
-    // Each complete CPD record → hex string → broadcast to all WS clients
+    // Each complete CPD record → classify → persist → broadcast
     parser.on('frame', (buf) => {
+      const eventType = cpdEventType(buf);
+
+      if (eventType === 'DETACHED') {
+        // Flush ring buffer: only keep frames from the next ATTACHED onwards
+        recordHistory.length = 0;
+        resetSessionFile();
+      }
+
+      // Append raw bytes to session .cpd file
+      if (sessionFileStream) sessionFileStream.write(buf);
+
+      // Add to ring buffer (after DETACHED flush, so DETACHED frame itself is entry #0)
       const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
-      broadcast({ type: 'CPD_RECORD', hex, ts: Date.now() });
+      const ts  = Date.now();
+      recordHistory.push({ hex, ts });
+      if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
+
+      broadcast({ type: 'CPD_RECORD', hex, ts });
     });
 
     sp.on('error', (e) => {
@@ -221,6 +298,8 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'WELCOME', ts: Date.now(), version: '1.0.0' }));
   ws.send(JSON.stringify({ type: 'SERIAL_STATUS', ...serialStatus }));
   ws.send(JSON.stringify({ type: 'PORT_LIST', ports: _cachedPorts }));
+  // Replay history so reloaded browser pages can rebuild their state
+  ws.send(JSON.stringify({ type: 'HISTORY', records: recordHistory }));
 });
 
 // ----- REST API -----

@@ -40,7 +40,7 @@
 
 /* ── Side property panels ───────────────────────────────────── */
 .sidePanel {
-  width: 220px;
+  width: 200px;
   flex-shrink: 0;
   overflow-y: auto;
   border-right: 1px solid #1e2535;
@@ -49,6 +49,11 @@
 }
 .sidePanel:last-child {
   border-right: none;
+  border-left: 1px solid #1e2535;
+}
+/* Cable panel is narrower \u2014 typically only a few rows */
+.sidePanel:nth-child(3) {
+  width: 150px;
   border-left: 1px solid #1e2535;
 }
 
@@ -154,20 +159,19 @@
 
 /* ── eMarker box ────────────────────────────────────────────── */
 .eMarker {
-  border: 1px solid #1e2535;
+  border: 1px solid #3a4060;
   border-radius: 4px;
   padding: 4px 8px;
   text-align: center;
   flex-shrink: 0;
-  background: #0d111a;
-  opacity: 0.55;
-  transition: opacity 0.3s, border-color 0.3s;
+  background: #141824;
+  transition: border-color 0.3s, background 0.3s;
 }
-.eMarkerActive { opacity: 1; border-color: #388e3c; background: rgba(56,142,60,0.1); }
+.eMarkerActive { border-color: #388e3c; background: rgba(56,142,60,0.1); }
 
-.eMarkerTitle { font-size: 8px; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.eMarkerTitle { font-size: 8px; color: #778; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
 .eMarkerSops  { font-size: 9px; font-family: monospace; display: flex; gap: 4px; align-items: center; justify-content: center; }
-.eMarkerSep   { color: #334; }
+.eMarkerSep   { color: #556; }
 
 /* ── VBUS status bar ────────────────────────────────────────── */
 .vbusBar {

@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useCpdImport } from './hooks/useCpdImport';
 import { useAppStore }  from './store/appStore';
+const useSerialConnected = () => useAppStore((s) => s.serialStatus.connected);
 import TopologyView     from './components/TopologyView';
 import MessageTable     from './components/MessageTable';
 import Console          from './components/Console';
@@ -16,9 +17,15 @@ function StatusBadge() {
     disconnected: '#f44336',
     error:        '#e91e63',
   };
+  const labelMap = {
+    connected:    'App: Active',
+    connecting:   'App: Connecting…',
+    disconnected: 'App: Disconnected',
+    error:        'App: Error',
+  };
   return (
     <span style={{ color: colorMap[status] ?? '#aaa', fontSize: 12 }}>
-      ● {status}
+      ● {labelMap[status] ?? status}
     </span>
   );
 }
@@ -40,8 +47,9 @@ function ImportBadge() {
 }
 
 export default function App() {
-  const { sendPing, sendMessage }         = useWebSocket();
+  const { sendPing, sendMessage }       = useWebSocket();
   const { openFilePicker, importFiles } = useCpdImport();
+  const serialConnected                 = useSerialConnected();
   const [dragging, setDragging]   = useState(false);
 
   const onDragOver = useCallback((e) => {
@@ -81,17 +89,20 @@ export default function App() {
         </div>
       )}
 
-      {/* Title bar */}
+      {/* Title bar — also hosts serial port controls */}
       <header className={styles.titleBar}>
         <span className={styles.title}>STM32 UCPD Monitor</span>
         <StatusBadge />
         <ImportBadge />
-        <button onClick={openFilePicker} className={styles.importBtn}>.cpd Import</button>
-        <button onClick={sendPing} className={styles.pingBtn}>Ping</button>
+        <button
+          onClick={openFilePicker}
+          className={styles.importBtn}
+          disabled={serialConnected}
+          title={serialConnected ? 'Disconnect DISCO before importing a .cpd file' : undefined}
+        >.cpd Import</button>
+        <button onClick={sendPing} className={styles.pingBtn} style={{ display: 'none' }}>Ping</button>
+        <SerialBar sendMessage={sendMessage} />
       </header>
-
-      {/* Serial port toolbar */}
-      <SerialBar sendMessage={sendMessage} />
 
       {/* Topology strip */}
       <TopologyView />

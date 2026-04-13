@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './TopologyView.module.css';
 
@@ -31,20 +31,36 @@ function pdoBadge(pdo) {
   return pdo.pdoType === 'APDO_PPS' ? 'PPS' : pdo.pdoType === 'APDO_AVS' ? 'AVS' : pdo.pdoType;
 }
 
+// ── Contract voltage helper ──────────────────────────────────
+
+function contractVoltStr(pdo) {
+  if (!pdo) return '—';
+  if (pdo.pdoType === 'Fixed')    return `${(pdo.vMv / 1000).toFixed(1)} V`;
+  if (pdo.vMinMv != null)         return `${(pdo.vMinMv / 1000).toFixed(1)}–${(pdo.vMaxMv / 1000).toFixed(1)} V`;
+  return '—';
+}
+
 // ── Property tree builders ───────────────────────────────────────
 
-function buildSourceItems(source, vbusMv, ccPin) {
+function buildSourceItems(source) {
   if (!source.connected) {
     return [{ key: 'Status', value: 'Not connected', color: '#555' }];
   }
   const items = [];
   items.push({ key: 'PD Rev', value: source.pdRevision ?? '—' });
 
+  // EPR / SPR mode
+  if (source.eprActive) {
+    items.push({ key: 'Mode', value: 'EPR', color: '#ff9800' });
+  } else if (source.contract) {
+    items.push({ key: 'Mode', value: 'SPR', color: '#a5d6a7' });
+  }
+
   if (source.capabilities.length) {
     items.push({
       key: 'Capabilities',
       value: `${source.capabilities.length} PDO${source.capabilities.length !== 1 ? 's' : ''}`,
-      autoExpand: true,
+      autoExpand: false,
       children: source.capabilities.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
@@ -55,13 +71,16 @@ function buildSourceItems(source, vbusMv, ccPin) {
 
   if (source.contract) {
     const { pdo, objPos, opCurrent_mA, maxCurrent_mA, capMismatch } = source.contract;
+    const voltStr = contractVoltStr(pdo);
     items.push({
       key: 'Contract',
-      value: `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`,
-      color: '#4caf50',
+      value: `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`,
+      color: source.eprActive ? '#ffb74d' : '#4caf50',
       autoExpand: true,
       children: [
+        { key: 'PDO Type',    value: pdo?.pdoType ?? '—', color: PDO_COLORS[pdo?.pdoType] },
         { key: 'PDO',         value: pdoLabel(pdo), color: PDO_COLORS[pdo?.pdoType] },
+        { key: 'Voltage',     value: voltStr },
         { key: 'Op Current',  value: `${(opCurrent_mA / 1000).toFixed(2)} A` },
         { key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` },
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
@@ -69,9 +88,14 @@ function buildSourceItems(source, vbusMv, ccPin) {
     });
   }
 
-  if (source.eprActive) items.push({ key: 'EPR', value: 'Active', color: '#ff9800' });
-  if (vbusMv != null)   items.push({ key: 'VBUS', value: `${vbusMv} mV  (${(vbusMv / 1000).toFixed(2)} V)` });
-  if (ccPin  != null)   items.push({ key: 'CC Pin', value: `CC${ccPin}` });
+  if (source.status?.length) {
+    items.push({
+      key: 'Status Msg',
+      value: '',
+      autoExpand: false,
+      children: source.status.map((s) => ({ key: s.label, value: s.value })),
+    });
+  }
 
   return items;
 }
@@ -83,11 +107,14 @@ function buildSinkItems(sink) {
   const items = [];
   items.push({ key: 'PD Rev', value: sink.pdRevision ?? '—' });
 
+  // EPR / SPR mode
+  if (sink.eprActive) items.push({ key: 'Mode', value: 'EPR', color: '#ff9800' });
+
   if (sink.capabilities.length) {
     items.push({
       key: 'Sink Caps',
       value: `${sink.capabilities.length} PDO${sink.capabilities.length !== 1 ? 's' : ''}`,
-      autoExpand: true,
+      autoExpand: false,
       children: sink.capabilities.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
@@ -99,11 +126,12 @@ function buildSinkItems(sink) {
   if (sink.lastRequest) {
     const { objPos, opCurrent_mA, maxCurrent_mA, capMismatch } = sink.lastRequest;
     items.push({
-      key: 'Request',
+      key: 'RDO',
       value: `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`,
       color: '#90caf9',
-      autoExpand: false,
+      autoExpand: true,
       children: [
+        { key: 'Object Pos',  value: `#${objPos}` },
         { key: 'Op Current',  value: `${(opCurrent_mA  / 1000).toFixed(2)} A` },
         { key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` },
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
@@ -111,7 +139,49 @@ function buildSinkItems(sink) {
     });
   }
 
-  if (sink.eprActive) items.push({ key: 'EPR', value: 'Active', color: '#ff9800' });
+  if (sink.status?.length) {
+    items.push({
+      key: 'Status Msg',
+      value: '',
+      autoExpand: false,
+      children: sink.status.map((s) => ({ key: s.label, value: s.value })),
+    });
+  }
+
+  return items;
+}
+
+function buildCableItems(eMarker) {
+  const anyDetected = eMarker.sop1Detected || eMarker.sop2Detected;
+  if (!anyDetected) {
+    return [{ key: 'eMarker', value: 'Not detected', color: '#555' }];
+  }
+  const items = [];
+  items.push({ key: 'eMarker', value: 'Detected', color: '#4caf50' });
+  const sopStr = [eMarker.sop1Detected && "SOP'", eMarker.sop2Detected && "SOP''"].filter(Boolean).join(', ');
+  items.push({ key: 'SOP Traffic', value: sopStr, color: '#4caf50' });
+  if (eMarker.isActive != null) {
+    items.push({ key: 'Type', value: eMarker.isActive ? 'Active' : 'Passive' });
+  }
+  if (eMarker.cableCurrentMa != null) {
+    items.push({
+      key: 'Current Rating',
+      value: eMarker.cableCurrentMa >= 5000 ? '5 A' : '3 A',
+      color: eMarker.cableCurrentMa >= 5000 ? '#ffb74d' : '#a5d6a7',
+    });
+  } else {
+    items.push({ key: 'Current Rating', value: 'Default (< 3 A)', color: '#888' });
+  }
+  if (eMarker.maxVbusV != null) {
+    items.push({ key: 'Max VBUS', value: `${eMarker.maxVbusV} V` });
+  }
+  if (eMarker.eprCapable != null) {
+    items.push({
+      key: 'EPR Capable',
+      value: eMarker.eprCapable ? 'Yes' : 'No',
+      color: eMarker.eprCapable ? '#ff9800' : '#888',
+    });
+  }
   return items;
 }
 
@@ -121,11 +191,16 @@ function PropNode({ item, depth }) {
   const hasChildren = item.children?.length > 0;
   const [open, setOpen] = useState(item.autoExpand ?? false);
 
+  const tooltip = item.value != null && item.value !== ''
+    ? `${item.key}: ${item.value}`
+    : item.key;
+
   return (
     <>
       <div
         className={`${styles.propRow} ${hasChildren ? styles.propRowClickable : ''}`}
         style={{ paddingLeft: 6 + depth * 12 }}
+        title={tooltip}
         onClick={() => hasChildren && setOpen((v) => !v)}
       >
         <span className={styles.propToggle}>
@@ -210,8 +285,11 @@ function EMarkerBox({ sop1, sop2 }) {
 // ── Main export ───────────────────────────────────────────────────
 
 export default function TopologyView() {
-  const { source, eMarker, sink, cable, vbusMv, ccPin } = useAppStore((s) => s.topology);
-  const resetTopology = useAppStore((s) => s.resetTopology);
+  const { source, eMarker, sink, cable } = useAppStore((s) => s.topology);
+  const messages     = useAppStore((s) => s.messages);
+  const replayFrames = useAppStore((s) => s.replayFrames);
+
+  const handleRefresh = useCallback(() => replayFrames(messages), [replayFrames, messages]);
 
   const srcState = nodeState(source.connected, source.eprActive, !!source.contract);
   const snkState = nodeState(sink.connected,   sink.eprActive,   !!source.contract);
@@ -224,21 +302,32 @@ export default function TopologyView() {
     return 'inactive';
   }, [source, sink, cable]);
 
-  const srcItems = useMemo(() => buildSourceItems(source, vbusMv, ccPin), [source, vbusMv, ccPin]);
-  const snkItems = useMemo(() => buildSinkItems(sink), [sink]);
+  const srcItems   = useMemo(() => buildSourceItems(source), [source]);
+  const snkItems   = useMemo(() => buildSinkItems(sink), [sink]);
+  const cableItems = useMemo(() => buildCableItems(eMarker), [eMarker]);
 
-  const srcSub = source.contract
-    ? `${pdoLabel(source.contract.pdo)} @ ${(source.contract.opCurrent_mA / 1000).toFixed(2)} A`
-    : source.connected ? 'Connected' : '';
-  const snkSub = sink.lastRequest
-    ? `Req PDO#${sink.lastRequest.objPos}`
-    : sink.connected ? 'Connected' : '';
+  const srcSub = (() => {
+    if (source.contract) {
+      const { pdo, opCurrent_mA } = source.contract;
+      const vStr = contractVoltStr(pdo);
+      const eprBadge = source.eprActive ? ' EPR' : '';
+      return `${vStr} / ${(opCurrent_mA / 1000).toFixed(2)} A  [${pdo?.pdoType ?? ''}]${eprBadge}`;
+    }
+    return source.connected ? (source.eprActive ? 'EPR' : 'PD') : '';
+  })();
+  const snkSub = (() => {
+    if (sink.lastRequest) {
+      const eprBadge = sink.eprActive ? ' EPR' : '';
+      return `Req #${sink.lastRequest.objPos}  ${(sink.lastRequest.opCurrent_mA / 1000).toFixed(2)} A${eprBadge}`;
+    }
+    return sink.connected ? (sink.eprActive ? 'EPR' : 'PD') : '';
+  })();
 
   return (
     <section className={styles.wrapper}>
       <header className={styles.header}>
         <span>Topology</span>
-        <button onClick={resetTopology} className={styles.resetBtn}>Reset</button>
+        <button onClick={handleRefresh} className={styles.resetBtn}>Refresh</button>
       </header>
       <div className={styles.body}>
         <PropPanel title="Source" items={srcItems} />
@@ -251,14 +340,10 @@ export default function TopologyView() {
             <Cable state={cableState} />
             <NodeBox label="SINK" sub={snkSub} state={snkState} />
           </div>
-          {vbusMv != null && (
-            <div className={styles.vbusBar}>
-              VBUS: {(vbusMv / 1000).toFixed(2)} V
-              {ccPin != null && `  ·  CC${ccPin}`}
-            </div>
-          )}
+
         </div>
 
+        <PropPanel title="Cable" items={cableItems} />
         <PropPanel title="Sink" items={snkItems} />
       </div>
     </section>

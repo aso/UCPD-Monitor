@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './SerialBar.module.css';
+import appStyles from '../App.module.css';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]; // eslint-disable-line no-unused-vars
 // Note: baud rate is meaningless for USB-CDC devices; kept only for non-CDC fallback.
@@ -35,23 +36,24 @@ function knownLabel(port) {
 export default function SerialBar({ sendMessage }) {
   const serialStatus = useAppStore((s) => s.serialStatus);
   const ports        = useAppStore((s) => s.serialPorts);
-  const hexDump      = useAppStore((s) => s.hexDump);
-  const setHexDump   = useAppStore((s) => s.setHexDump);
 
   const [selPort, setSelPort] = useState('');
 
-  // Auto-select when port list changes: prefer known STM32 board over others.
-  // Never override a manually chosen port or the currently active port.
+  // Sync the selector with the active port and auto-select on port list change.
   useEffect(() => {
-    if (serialStatus.connected) return; // don't disturb active connection
+    if (serialStatus.connected) {
+      // Always reflect the actually-connected port — survives browser reload
+      if (serialStatus.port) setSelPort(serialStatus.port);
+      return;
+    }
     setSelPort((prev) => {
       // Keep current selection if it still exists in the new list
       if (prev && ports.some((p) => p.path === prev)) return prev;
-      // Otherwise pick best candidate
+      // Otherwise pick best candidate: prefer known STM32 board over others
       const priority = ports.find((p) => knownLabel(p));
       return (priority ?? ports[0])?.path ?? '';
     });
-  }, [ports, serialStatus.connected]);
+  }, [ports, serialStatus.connected, serialStatus.port]);
 
   const handleRefresh = useCallback(() => {
     sendMessage({ type: 'GET_PORT_LIST' });
@@ -69,7 +71,8 @@ export default function SerialBar({ sendMessage }) {
   const isConnected = serialStatus.connected;
 
   return (
-    <div className={styles.bar}>
+    <>
+      <span className={appStyles.separator} />
       {/* Port selector */}
       <select
         className={styles.select}
@@ -132,15 +135,6 @@ export default function SerialBar({ sendMessage }) {
             ? `✕ ${serialStatus.error}`
             : '○ not connected'}
       </span>
-
-      {/* Hex dump toggle — only useful when connected */}
-      <button
-        className={hexDump ? styles.hexDumpBtnOn : styles.hexDumpBtn}
-        onClick={() => setHexDump(!hexDump)}
-        title={hexDump ? 'Hex dump ON — click to disable' : 'Hex dump OFF — click to enable (logs raw CPD bytes to Console)'}
-      >
-        HEX
-      </button>
-    </div>
+    </>
   );
 }

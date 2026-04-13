@@ -555,6 +555,176 @@ export function decodeRDO(dw, pdoType = 'Fixed') {
   };
 }
 
+// ==================== VDM / Structured VDM Decoders ====================
+
+/** USB PD Rev 3.2 Table 6.30 – Structured VDM command names */
+const VDM_CMD_NAMES = {
+  0x01: 'Discover Identity',
+  0x02: 'Discover SVIDs',
+  0x03: 'Discover Modes',
+  0x04: 'Enter Mode',
+  0x05: 'Exit Mode',
+  0x06: 'Attention',
+};
+
+/** Command Type field (bits[7:6] of VDM header lower word) */
+const VDM_CMD_TYPE = ['REQ', 'ACK', 'NAK', 'BUSY'];
+
+/** Well-known SVIDs */
+const VDM_SVID_NAMES = {
+  0xFF00: 'SOP',       // used during identity discovery (no Alt Mode)
+  0xFF01: 'DP',        // VESA DisplayPort Alt Mode
+  0x8087: 'TBT3',     // Intel Thunderbolt 3
+  0x04B4: 'Cypress',
+  0x18D1: 'Google',
+  0x2109: 'VIA Labs',
+  0x04CC: 'OPPO/OnePlus',
+};
+
+function fmtSvid(svid) {
+  const name = VDM_SVID_NAMES[svid];
+  return name
+    ? `${name} (0x${svid.toString(16).toUpperCase().padStart(4, '0')})`
+    : `0x${svid.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
+/**
+ * Decode Discover Identity ACK VDOs (USB PD Rev 3.2 §6.4.4.3).
+ * vdos = dataObjects[1..] (excluding the VDM header DO).
+ *
+ * DO order:  ID Header VDO, Cert Stat VDO, Product VDO, [Product Type VDO(s)]
+ */
+function decodeDiscoverIdentityVDOs(vdos) {
+  const out = [];
+  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+
+  // ---- VDO[1] ID Header VDO (Table 6.41) ----
+  if (vdos.length >= 1) {
+    const dw   = vdos[0];
+    const vid  = dw & 0xFFFF;
+    const connType = (dw >>> 24) & 0x3; // bits[25:24]
+    const connNames = ['Rsvd', 'USB-A', 'USB-B', 'USB-C'];
+    const flags = [
+      (dw >>> 31) & 1 ? 'USB Host' : null,
+      (dw >>> 30) & 1 ? 'USB Device' : null,
+      (dw >>> 29) & 1 ? 'Modal Op' : null,
+      (dw >>> 28) & 1 ? 'USB4' : null,
+    ].filter(Boolean).join(', ') || 'none';
+    out.push({
+      label: `ID Header VDO — VID=0x${vid.toString(16).toUpperCase().padStart(4,'0')} Conn=${connNames[connType]} Flags=[${flags}]`,
+      raw: hex32(dw),
+    });
+  }
+
+  // ---- VDO[2] Cert Stat VDO (Table 6.42): XID in bits[19:0] ----
+  if (vdos.length >= 2) {
+    const dw  = vdos[1];
+    const xid = dw & 0x000FFFFF;
+    out.push({
+      label: `Cert Stat VDO — XID=0x${xid.toString(16).toUpperCase()}`,
+      raw: hex32(dw),
+    });
+  }
+
+  // ---- VDO[3] Product VDO (Table 6.43) ----
+  if (vdos.length >= 3) {
+    const dw  = vdos[2];
+    const pid = (dw >>> 16) & 0xFFFF;
+    const bcd = dw & 0xFFFF;
+    out.push({
+      label: `Product VDO — PID=0x${pid.toString(16).toUpperCase().padStart(4,'0')} bcdDevice=0x${bcd.toString(16).toUpperCase().padStart(4,'0')}`,
+      raw: hex32(dw),
+    });
+  }
+
+  // ---- VDO[4+] Product Type VDOs (Cable Plug or UFP/DFP) — raw for now ----
+  for (let i = 3; i < vdos.length; i++) {
+    out.push({
+      label: `Product Type VDO[${i - 2}] — 0x${(vdos[i] >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+      raw: hex32(vdos[i]),
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Decode Discover SVIDs ACK VDOs (USB PD Rev 3.2 §6.4.4.4).
+ * Each VDO contains two SVIDs: bits[31:16] and bits[15:0].
+ * The last entry has 0x0000 in bytes[15:0] when list ends.
+ */
+function decodeDiscoverSVIDsVDOs(vdos) {
+  const out = [];
+  for (const dw of vdos) {
+    const s1 = (dw >>> 16) & 0xFFFF;
+    const s2 = dw & 0xFFFF;
+    const pair = [s1, s2].filter((s) => s !== 0).map(fmtSvid).join(', ');
+    out.push({
+      label: `SVID Pair: ${pair || '(end)'}`,
+      raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+    });
+  }
+  return out;
+}
+
+/**
+ * Decode Discover Modes ACK VDOs for DisplayPort Alt Mode (SVID=0xFF01).
+ * USB PD Rev 3.2 §B.1 – DP Capabilities VDO.
+ */
+function decodeDPModeVDOs(vdos) {
+  const out = [];
+  for (let i = 0; i < vdos.length; i++) {
+    const dw = vdos[i];
+    if (i === 0) {
+      // DP Capabilities VDO
+      const ufpD     = (dw >>> 0) & 0xF;  // bits[3:0]  UFP_D capable (Pin Assignments)
+      const dfpD     = (dw >>> 8) & 0xF;  // bits[11:8] DFP_D capable
+      const recep    = (dw >>> 6) & 0x1;  // bit[6]     Receptacle indication
+      const usb20    = (dw >>> 7) & 0x1;  // bit[7]     USB 2.0 signaling
+      const sig      = (dw >>> 16) & 0xF; // bits[19:16] DP Signaling
+      const sigNames = { 0: 'DP', 1: 'Gen2', 2: 'Reserved', 8: 'Gen3' };
+      out.push({
+        label: `DP Capabilities VDO — UFP_D=0x${ufpD.toString(16).toUpperCase()} DFP_D=0x${dfpD.toString(16).toUpperCase()} Sig=${sigNames[sig] ?? sig}${recep ? ' Receptacle' : ' Plug'}${usb20 ? ' USB2.0' : ''}`,
+        raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+      });
+    } else {
+      out.push({
+        label: `Mode VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+        raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Decode Attention / Enter Mode / Exit Mode VDOs for DP (SVID=0xFF01).
+ * DP Status VDO (Enter Mode ACK, Attention) – Table B-3.
+ */
+function decodeDPStatusVDO(dw) {
+  const connected = (dw >>> 0) & 0x3;
+  const adaptor   = (dw >>> 2) & 0x1;
+  const powerLow  = (dw >>> 3) & 0x1;
+  const enabled   = (dw >>> 4) & 0x1;
+  const multifunc = (dw >>> 5) & 0x1;
+  const usb       = (dw >>> 6) & 0x1;
+  const exitDp    = (dw >>> 7) & 0x1;
+  const hpd       = (dw >>> 8) & 0x1;
+  const connNames = ['Disconnected', 'DFP_D', 'UFP_D', 'Both'];
+  const flags = [
+    adaptor ? 'Adaptor' : null,
+    powerLow ? 'PowerLow' : null,
+    enabled ? 'Enabled' : null,
+    multifunc ? 'Multifunc' : null,
+    usb ? 'USB' : null,
+    exitDp ? 'ExitDP' : null,
+    hpd ? 'HPD' : null,
+  ].filter(Boolean).join(' ');
+  return `DP Status VDO — Conn=${connNames[connected]}${flags ? ' ' + flags : ''}`;
+}
+
+// =======================================================================
+
 /**
  * Decode all Data Objects in a message based on message type.
  * Returns an array of decoded child objects (for tree-view display).
@@ -631,23 +801,72 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
     }
 
     case 'Vendor_Defined': {
-      // VDM header is first DO
-      const vdmHdr  = dataObjects[0];
-      const svid    = (vdmHdr >>> 16) & 0xFFFF;
-      const vdmType = (vdmHdr >>> 15) & 0x1  ? 'Structured' : 'Unstructured';
-      const cmdType = (vdmHdr >>> 6) & 0x3;
-      const cmd     = vdmHdr & 0x1F;
-      const children = [
-        {
-          label: `VDM Header — SVID:0x${svid.toString(16).toUpperCase()} ${vdmType} CMD:0x${cmd.toString(16)} CmdType:${cmdType}`,
-          raw: `0x${vdmHdr.toString(16).toUpperCase().padStart(8,'0')}`,
-        },
-        ...dataObjects.slice(1).map((dw, i) => ({
-          label: `VDO[${i + 1}]: 0x${dw.toString(16).toUpperCase().padStart(8, '0')}`,
-          raw: `0x${dw.toString(16).toUpperCase().padStart(8, '0')}`,
-        })),
+      const vdmHdr   = dataObjects[0];
+      const svid     = (vdmHdr >>> 16) & 0xFFFF;
+      const structured = (vdmHdr >>> 15) & 0x1;
+
+      if (!structured) {
+        // Unstructured VDM — just show raw DOs
+        return [
+          {
+            label: `VDM Header — SVID:${fmtSvid(svid)} Unstructured`,
+            raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          },
+          ...dataObjects.slice(1).map((dw, i) => ({
+            label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })),
+        ];
+      }
+
+      // Structured VDM Header (USB PD Rev 3.2 Table 6.30)
+      // bit[15]=VDM Type, bits[14:13]=VDM Version, bits[7:6]=CmdType, bits[4:0]=Command
+      const cmdType  = (vdmHdr >>> 6) & 0x3;
+      const cmd      = vdmHdr & 0x1F;
+      const objPos   = (vdmHdr >>> 8) & 0x7;   // bits[10:8] Object Position (Enter/Exit/Attention)
+
+      const cmdName      = VDM_CMD_NAMES[cmd] ?? `CMD_0x${cmd.toString(16)}`;
+      const cmdTypeName  = VDM_CMD_TYPE[cmdType];
+      const objPosStr    = (objPos && (cmd === 0x04 || cmd === 0x05 || cmd === 0x06))
+        ? ` Obj#${objPos}` : '';
+
+      const headerLabel =
+        `VDM Header — SVID:${fmtSvid(svid)} ${cmdName} [${cmdTypeName}]${objPosStr}`;
+
+      const vdos = dataObjects.slice(1);
+
+      // Decode VDOs based on command + cmdType + SVID
+      let decodedVdos;
+      if (cmd === 0x01 && cmdType === 1) {
+        // Discover Identity ACK — standard VDO structure
+        decodedVdos = decodeDiscoverIdentityVDOs(vdos);
+      } else if (cmd === 0x02 && cmdType === 1) {
+        // Discover SVIDs ACK
+        decodedVdos = decodeDiscoverSVIDsVDOs(vdos);
+      } else if (cmd === 0x03 && cmdType === 1 && svid === 0xFF01) {
+        // Discover Modes ACK for DisplayPort
+        decodedVdos = decodeDPModeVDOs(vdos);
+      } else if ((cmd === 0x04 || cmd === 0x06) && svid === 0xFF01 && vdos.length >= 1) {
+        // Enter Mode ACK / Attention for DP — first VDO is DP Status VDO
+        decodedVdos = [
+          { label: decodeDPStatusVDO(vdos[0]), raw: `0x${(vdos[0] >>> 0).toString(16).toUpperCase().padStart(8,'0')}` },
+          ...vdos.slice(1).map((dw, i) => ({
+            label: `VDO[${i + 2}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })),
+        ];
+      } else {
+        // REQ (no VDOs expected) or unknown — show raw
+        decodedVdos = vdos.map((dw, i) => ({
+          label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+        }));
+      }
+
+      return [
+        { label: headerLabel, raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}` },
+        ...decodedVdos,
       ];
-      return children;
     }
 
     default:

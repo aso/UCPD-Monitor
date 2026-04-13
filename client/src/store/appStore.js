@@ -6,9 +6,9 @@ import { decodePDO, decodeRDO } from '../parsers/pd_parser';
  */
 
 // ── Topology initial shapes ──────────────────────────────────────
-const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], contract: null };
-const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, vdoInfo: null };
-const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], lastRequest: null };
+const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], contract: null, status: null };
+const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
+const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], lastRequest: null, status: null };
 
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
@@ -24,7 +24,7 @@ export const INITIAL_TOPOLOGY = {
  * Called both for live WebSocket frames and during file-import replay.
  */
 function applyFrameToTopo(topo, frame) {
-  const { recordType, header, cpd, eventName, dataObjects, vbusMv, ccPin } = frame;
+  const { recordType, header, cpd, eventName, dataObjects, parsedPayload, vbusMv, ccPin } = frame;
 
   // ── EVENT records ──
   if (recordType === 'EVENT') {
@@ -78,15 +78,20 @@ function applyFrameToTopo(topo, frame) {
   if (isSOP) {
     if (typeName === 'Source_Capabilities' && isSrcDir) {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1));
+      // Source advertising caps → both sides are present on the bus
       next.source = { ...next.source, connected: true, pdRevision: header.specRevision, capabilities: caps };
+      next.sink   = { ...next.sink,   connected: true };
 
     } else if (typeName === 'Sink_Capabilities') {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1));
-      next.sink = { ...next.sink, connected: true, pdRevision: header.specRevision, capabilities: caps };
+      next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, capabilities: caps };
+      next.source = { ...next.source, connected: true };
 
     } else if ((typeName === 'Request' || typeName === 'EPR_Request') && isSnkDir) {
       const rdo = dataObjects?.length ? decodeRDO(dataObjects[0]) : null;
-      next.sink = { ...next.sink, lastRequest: rdo };
+      // Sink sending a request → both sides present
+      next.sink   = { ...next.sink,   connected: true, lastRequest: rdo };
+      next.source = { ...next.source, connected: true };
 
     } else if (typeName === 'PS_RDY' && isSrcDir) {
       // Contract established: cross-reference RDO with the source capabilities
@@ -108,12 +113,35 @@ function applyFrameToTopo(topo, frame) {
     } else if (typeName === 'EPR_Mode') {
       next.source = { ...next.source, eprActive: true };
       next.sink   = { ...next.sink,   eprActive: true };
+
+    } else if (typeName === 'Status') {
+      // Extended Status message — store decoded payload for topology display
+      if (isSrcDir) next.source = { ...next.source, status: parsedPayload };
+      else if (isSnkDir) next.sink = { ...next.sink, status: parsedPayload };
     }
   }
 
   // eMarker detection via SOP' / SOP'' traffic
   if (isSOP1) next.eMarker = { ...next.eMarker, sop1Detected: true };
   if (isSOP2) next.eMarker = { ...next.eMarker, sop2Detected: true };
+
+  // SOP' Discover Identity ACK → decode cable plug VDO for current rating, type, etc.
+  if (isSOP1 && typeName === 'Vendor_Defined' && dataObjects?.length >= 5) {
+    const vdmHdr     = dataObjects[0];
+    const structured = (vdmHdr >>> 15) & 0x1;
+    const cmd        = vdmHdr & 0x1F;
+    const cmdType    = (vdmHdr >>> 6) & 0x3;
+    if (structured && cmd === 0x01 && cmdType === 1) {
+      // Cable Plug VDO is the 5th DO (index 4)
+      const cableVdo      = dataObjects[4];
+      const curRating     = (cableVdo >>> 5) & 0x3;
+      const cableCurrentMa = curRating === 1 ? 3000 : curRating === 2 ? 5000 : null;
+      const maxVbusV      = [20, 30, 40, 50][(cableVdo >>> 8) & 0x3] ?? 20;
+      const isActive      = ((cableVdo >>> 10) & 0x3) >= 2;
+      const eprCapable    = !!(cableVdo & (1 << 15));
+      next.eMarker = { ...next.eMarker, sop1Detected: true, cableCurrentMa, maxVbusV, isActive, eprCapable };
+    }
+  }
 
   return next;
 }

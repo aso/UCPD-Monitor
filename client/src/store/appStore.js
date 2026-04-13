@@ -83,7 +83,7 @@ function applyFrameToTopo(topo, frame) {
       next.sink   = { ...next.sink,   connected: true };
 
     } else if (typeName === 'Sink_Capabilities') {
-      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1));
+      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1, true));
       next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, capabilities: caps };
       next.source = { ...next.source, connected: true };
 
@@ -106,14 +106,18 @@ function applyFrameToTopo(topo, frame) {
       if (rdo && next.source.capabilities.length) {
         const pdo = next.source.capabilities[rdo.objPos - 1] ?? null;
         const isAdjustable = rdo.rdoType === 'PPS' || rdo.rdoType === 'AVS';
+        const isBattery    = rdo.rdoType === 'Battery';
         next.source = {
           ...next.source,
           contract: {
             pdo,
             objPos:        rdo.objPos,
             opVoltage_mV:  isAdjustable ? rdo.opVoltage_mV : null,
-            opCurrent_mA:  rdo.opCurrent_mA,
-            maxCurrent_mA: isAdjustable ? rdo.opCurrent_mA : rdo.maxCurrent_mA,
+            opCurrent_mA:  isBattery    ? null : rdo.opCurrent_mA,
+            maxCurrent_mA: isBattery    ? null : (isAdjustable ? rdo.opCurrent_mA : rdo.maxCurrent_mA),
+            opPower_mW:    isBattery    ? rdo.opPower_mW  : null,
+            limPower_mW:   isBattery    ? rdo.limPower_mW : null,
+            giveBack:      rdo.giveBack ?? false,
             capMismatch:   rdo.capMismatch,
             rdoType:       rdo.rdoType,
           },
@@ -128,6 +132,15 @@ function applyFrameToTopo(topo, frame) {
       // Extended Status message — store decoded payload for topology display
       if (isSrcDir) next.source = { ...next.source, status: parsedPayload };
       else if (isSnkDir) next.sink = { ...next.sink, status: parsedPayload };
+
+    } else if (typeName === 'Revision' && dataObjects?.length) {
+      // Table 6.53 — Revision message: update sender's PD revision
+      const dw = dataObjects[0];
+      const revMajor = (dw >>> 28) & 0xF;
+      const revMinor = (dw >>> 24) & 0xF;
+      const revStr   = `${revMajor}.${revMinor}`;
+      if (isSrcDir) next.source = { ...next.source, pdRevision: revStr };
+      else if (isSnkDir) next.sink = { ...next.sink, pdRevision: revStr };
     }
   }
 

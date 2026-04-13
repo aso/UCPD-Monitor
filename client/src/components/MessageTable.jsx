@@ -1,18 +1,8 @@
-import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef, memo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from '../store/appStore';
 import { decodeDataObjects, decodePDO, buildRdoSummary } from '../parsers/pd_parser';
 import styles from './MessageTable.module.css';
-
-/** Scan backwards from msgIndexAsc to find the nearest Source_Capabilities data objects */
-function findPrecedingSourceDOs(allMessages, msgIndexAsc) {
-  for (let i = msgIndexAsc - 1; i >= 0; i--) {
-    const m = allMessages[i];
-    if (m.header?.typeName === 'Source_Capabilities' && m.dataObjects?.length) {
-      return m.dataObjects;
-    }
-  }
-  return null;
-}
 
 /** Format a microsecond-since-boot uint32 as MM:SS.μμμμμμ */
 function formatUsTs(us) {
@@ -38,29 +28,38 @@ const DIR_LABELS = {
 };
 
 const PDO_TYPE_COLORS = {
-  'Fixed':       '#80deea',
-  'Battery':     '#ffcc80',
-  'Variable':    '#b39ddb',
-  'APDO_PPS':    '#a5d6a7',
-  'APDO_AVS':    '#f48fb1',
-  'APDO_Unknown':'#aaa',
+  'Fixed':        '#80deea',
+  'Battery':      '#ffcc80',
+  'Variable':     '#b39ddb',
+  'APDO_PPS':     '#a5d6a7',
+  'APDO_AVS':     '#f48fb1',
+  'APDO_SPR_AVS': '#ce93d8',
+  'APDO_Unknown': '#aaa',
 };
 
 /** Fixed-PDO capability flags as short tokens */
 function fixedFlags(pdo) {
   const flags = [];
   if (pdo.dualRolePower)      flags.push('DRP');
-  if (pdo.usbSuspend)         flags.push('USB-Susp');
-  if (pdo.unconstrainedPower) flags.push('UCPwr');
-  if (pdo.usbCommsCapable)    flags.push('USB-Comm');
-  if (pdo.dualRoleData)       flags.push('DRD');
-  if (pdo.unchunkedExtMsg)    flags.push('UnchukedExt');
-  if (pdo.eprModeCapable)     flags.push('EPR');
+  if (pdo.isSink) {
+    if (pdo.higherCapability)   flags.push('HigherCap');
+    if (pdo.unconstrainedPower) flags.push('UCPwr');
+    if (pdo.usbCommsCapable)    flags.push('USB-Comm');
+    if (pdo.dualRoleData)       flags.push('DRD');
+    if (pdo.fastRoleSwap > 0)   flags.push(pdo.fastRoleSwapLabel);
+  } else {
+    if (pdo.usbSuspend)         flags.push('USB-Susp');
+    if (pdo.unconstrainedPower) flags.push('UCPwr');
+    if (pdo.usbCommsCapable)    flags.push('USB-Comm');
+    if (pdo.dualRoleData)       flags.push('DRD');
+    if (pdo.unchunkedExtMsg)    flags.push('UnchukedExt');
+    if (pdo.eprModeCapable)     flags.push('EPR');
+  }
   return flags.join('  ');
 }
 
 /** Render the source PDO that was resolved from RDO's objPos */
-function ResolvedPdoRow({ pdo, objPos }) {
+function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
   const typeColor = PDO_TYPE_COLORS[pdo.pdoType] ?? '#aaa';
   const details = [];
 
@@ -72,22 +71,26 @@ function ResolvedPdoRow({ pdo, objPos }) {
     if (fl) details.push(fl);
   } else if (pdo.pdoType === 'Battery') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
-    details.push(`${(pdo.wMax/1000).toFixed(2)} W`);
+    details.push(`${pdo.isSink ? 'Op' : 'Max'}:${(pdo.wMax/1000).toFixed(2)} W`);
   } else if (pdo.pdoType === 'Variable') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
-    details.push(`${(pdo.iMa/1000).toFixed(2)} A`);
+    details.push(`${pdo.isSink ? 'Op' : 'Max'}:${(pdo.iMa/1000).toFixed(2)} A`);
   } else if (pdo.pdoType === 'APDO_PPS') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
-    details.push(`${(pdo.iMa/1000).toFixed(2)} A`);
-  } else if (pdo.pdoType === 'APDO_AVS') {
-    details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${pdo.pdpW} W`);
+  } else if (pdo.pdoType === 'APDO_SPR_AVS') {
+    details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
+    details.push(`${(pdo.iMa_9_15/1000).toFixed(2)} A (9–15V)`);
+    if (pdo.iMa_15_20 > 0) details.push(`${(pdo.iMa_15_20/1000).toFixed(2)} A (15–20V)`);
   }
 
-  const badgeLabel = pdo.pdoType === 'APDO_PPS' ? 'PPS' : pdo.pdoType === 'APDO_AVS' ? 'AVS' : pdo.pdoType;
+  const badgeLabel = pdo.pdoType === 'APDO_PPS' ? 'PPS'
+    : pdo.pdoType === 'APDO_AVS' ? 'AVS'
+    : pdo.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
+    : pdo.pdoType;
 
   return (
-    <tr className={styles.resolvedPdoRow}>
+    <tr className={`${styles.resolvedPdoRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
       <td />
       <td colSpan={2} className={styles.resolvedPdoIndex}>
         <span className={styles.treeLL}>└─└</span>
@@ -103,7 +106,7 @@ function ResolvedPdoRow({ pdo, objPos }) {
 }
 
 /** Render a single PDO child row */
-function PdoRow({ child }) {
+function PdoRow({ child, isParentSelected }) {
   const typeColor = PDO_TYPE_COLORS[child.pdoType] ?? '#aaa';
   const details = [];
 
@@ -115,10 +118,10 @@ function PdoRow({ child }) {
     if (fl) details.push(fl);
   } else if (child.pdoType === 'Battery') {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
-    details.push(`${(child.wMax/1000).toFixed(2)} W`);
+    details.push(`${child.isSink ? 'Op' : 'Max'}:${(child.wMax/1000).toFixed(2)} W`);
   } else if (child.pdoType === 'Variable') {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
-    details.push(`${(child.iMa/1000).toFixed(2)} A`);
+    details.push(`${child.isSink ? 'Op' : 'Max'}:${(child.iMa/1000).toFixed(2)} A`);
   } else if (child.pdoType === 'APDO_PPS') {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${(child.iMa/1000).toFixed(2)} A`);
@@ -126,22 +129,33 @@ function PdoRow({ child }) {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${child.pdpW} W`);
     if (child.peakCurrentLabel) details.push(child.peakCurrentLabel);
+  } else if (child.pdoType === 'APDO_SPR_AVS') {
+    details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
+    details.push(`${(child.iMa_9_15/1000).toFixed(2)} A (9–15V)`);
+    if (child.iMa_15_20 > 0) details.push(`${(child.iMa_15_20/1000).toFixed(2)} A (15–20V)`);
+    if (child.peakCurrentLabel) details.push(child.peakCurrentLabel);
   } else if (child.rdoType === 'PPS' || child.rdoType === 'AVS') {
-    // PPS / AVS RDO
     details.push(`PDO#${child.objPos}`);
     details.push(`Out:${(child.opVoltage_mV / 1000).toFixed(3)} V`);
     details.push(`Op:${(child.opCurrent_mA / 1000).toFixed(2)} A`);
     if (child.capMismatch) details.push('CapMismatch');
+    if (child.eprMode)     details.push('EPR');
+  } else if (child.rdoType === 'Battery') {
+    details.push(`PDO#${child.objPos}`);
+    details.push(`Op:${(child.opPower_mW/1000).toFixed(2)} W`);
+    details.push(`${child.giveBack ? 'Min' : 'Max'}:${(child.limPower_mW/1000).toFixed(2)} W`);
+    if (child.giveBack)    details.push('GiveBack');
+    if (child.capMismatch) details.push('CapMismatch');
+    if (child.eprMode)     details.push('EPR');
   } else if (child.opCurrent_mA !== undefined) {
-    // RDO
     details.push(`PDO#${child.objPos}`);
     details.push(`Op:${(child.opCurrent_mA/1000).toFixed(2)} A`);
-    details.push(`Max:${(child.maxCurrent_mA/1000).toFixed(2)} A`);
+    details.push(`${child.giveBack ? 'Min' : 'Max'}:${(child.maxCurrent_mA/1000).toFixed(2)} A`);
+    if (child.giveBack)    details.push('GiveBack');
     if (child.capMismatch) details.push('CapMismatch');
     if (child.eprMode)     details.push('EPR');
   }
 
-  // EPR_Mode action badge colour
   const EPR_ACTION_COLORS = {
     'Enter':               '#a5d6a7',
     'Enter Acknowledged':  '#80deea',
@@ -151,13 +165,12 @@ function PdoRow({ child }) {
   };
   const isEprMode  = child.action !== undefined;
   const eprColor   = isEprMode ? (EPR_ACTION_COLORS[child.action] ?? '#bdbdbd') : null;
-  // Generic key-value row (e.g. SCEDB fields from Source_Capabilities_Extended)
   const isKeyValue = !isEprMode && child.pdoType === undefined && child.opCurrent_mA === undefined
                      && child.label !== undefined && child.value !== undefined;
 
   if (isKeyValue) {
     return (
-      <tr className={styles.childRow}>
+      <tr className={`${styles.childRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
         <td />
         <td colSpan={2} className={styles.childIndex}>
           <span className={styles.treeL}>└</span>
@@ -169,7 +182,7 @@ function PdoRow({ child }) {
   }
 
   return (
-    <tr className={styles.childRow}>
+    <tr className={`${styles.childRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
       <td />
       <td colSpan={2} className={styles.childIndex}>
         <span className={styles.treeL}>└</span>
@@ -181,7 +194,10 @@ function PdoRow({ child }) {
           <>
             {child.pdoType && (
               <span className={styles.pdoTypeBadge} style={{ background: typeColor + '28', borderColor: typeColor, color: typeColor }}>
-                {child.pdoType === 'APDO_PPS' ? 'PPS' : child.pdoType === 'APDO_AVS' ? 'AVS' : child.pdoType}
+                {child.pdoType === 'APDO_PPS' ? 'PPS'
+                  : child.pdoType === 'APDO_AVS' ? 'AVS'
+                  : child.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
+                  : child.pdoType}
               </span>
             )}
             {child.eprMirror
@@ -198,13 +214,18 @@ function PdoRow({ child }) {
   );
 }
 
-/** Single message row (expandable if it has Data Objects) */
-function MessageRow({ msg, msgIndexAsc, allMessages, showRaw }) {
+/**
+ * Single message row — memoized to prevent re-render when unrelated rows change.
+ * expanded / onToggle are lifted to the parent to survive virtual-scroll unmount.
+ */
+const MessageRow = memo(function MessageRow({
+  msg, resolvedSourcePdo, showRaw, isSelected, expanded, onToggle, onSelect, onContextMenu,
+}) {
   const { header, cpd, recordType } = msg;
-  const [expanded, setExpanded] = useState(false);
+
+  const isRequest = header?.typeName === 'Request' || header?.typeName === 'EPR_Request';
 
   const children = useMemo(() => {
-    // parsedPayload (e.g. SCEDB from extended messages) takes priority over DO decode
     if (msg.parsedPayload?.length) return msg.parsedPayload;
     if (!header || !msg.dataObjects?.length) return null;
     return decodeDataObjects(header.typeName, msg.dataObjects);
@@ -212,24 +233,6 @@ function MessageRow({ msg, msgIndexAsc, allMessages, showRaw }) {
 
   const hasChildren = children && children.length > 0;
 
-  // For Request/EPR_Request: resolve the source PDO referenced by RDO's objPos,
-  // scanning backwards through the timeline to the nearest Source_Capabilities.
-  // objPos lives in bits 31..28 of the first DO — no need to depend on `children`.
-  const isRequest = header?.typeName === 'Request' || header?.typeName === 'EPR_Request';
-  const rdoObjPos = isRequest && msg.dataObjects?.[0] != null
-    ? (msg.dataObjects[0] >>> 28) & 0xF
-    : null;
-
-  const resolvedSourcePdo = useMemo(() => {
-    if (rdoObjPos == null) return null;
-    const srcDOs = findPrecedingSourceDOs(allMessages, msgIndexAsc);
-    if (!srcDOs) return null;
-    const pdoIdx = rdoObjPos - 1; // objPos is 1-based
-    if (pdoIdx < 0 || pdoIdx >= srcDOs.length) return null;
-    return { pdo: decodePDO(srcDOs[pdoIdx], rdoObjPos), objPos: rdoObjPos };
-  }, [rdoObjPos, allMessages, msgIndexAsc]);
-
-  // Re-decode RDO children with the resolved PDO type so PPS/AVS layouts are correct.
   const childrenTyped = useMemo(() => {
     if (!isRequest || !msg.dataObjects?.length || !resolvedSourcePdo) return children;
     return decodeDataObjects(header.typeName, msg.dataObjects, resolvedSourcePdo.pdo.pdoType);
@@ -240,13 +243,17 @@ function MessageRow({ msg, msgIndexAsc, allMessages, showRaw }) {
   const isDebug  = recordType === 'ASCII_LOG';
   const isEvent  = recordType === 'EVENT';
 
-  const toggle = useCallback(() => { if (hasChildren) setExpanded((v) => !v); }, [hasChildren]);
+  const handleClick = useCallback((e) => {
+    onSelect(e);
+    if (!e.shiftKey && hasChildren) onToggle();
+  }, [onSelect, hasChildren, onToggle]);
 
   return (
     <>
       <tr
-        className={`${styles.row} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''}`}
-        onClick={toggle}
+        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''}`}
+        onClick={handleClick}
+        onContextMenu={onContextMenu}
       >
         <td className={styles.num}>
           {hasChildren
@@ -277,7 +284,6 @@ function MessageRow({ msg, msgIndexAsc, allMessages, showRaw }) {
         <td className={isDebug ? styles.ascii : (msg.pdoSummary && !showRaw) ? styles.pdoSummary : styles.raw}>
           {(msg.pdoSummary && !showRaw)
             ? <>
-                {/* For Request messages, recompute summary with the resolved PDO type */}
                 <span className={styles.pdoSummaryText}>
                   {isRequest && resolvedSourcePdo && msg.dataObjects?.[0] != null
                     ? buildRdoSummary(msg.dataObjects[0], resolvedSourcePdo.pdo.pdoType)
@@ -290,30 +296,52 @@ function MessageRow({ msg, msgIndexAsc, allMessages, showRaw }) {
                 )}
                 {msg.eprCapable && <span className={styles.eprBadge}>EPR</span>}
               </>
-            : msg.raw}
+            : (msg.raw ? `DATA:${msg.raw}` : '')}
         </td>
       </tr>
       {expanded && hasChildren && (childrenTyped ?? children).map((child, i) => (
-        <PdoRow key={i} child={child} />
+        <PdoRow key={i} child={child} isParentSelected={isSelected} />
       ))}
       {expanded && resolvedSourcePdo && (
-        <ResolvedPdoRow pdo={resolvedSourcePdo.pdo} objPos={resolvedSourcePdo.objPos} />
+        <ResolvedPdoRow pdo={resolvedSourcePdo.pdo} objPos={resolvedSourcePdo.objPos} isParentSelected={isSelected} />
       )}
     </>
   );
+});
+
+/** Format one message as a tab-separated line for clipboard copy */
+function formatMsgForCopy(msg) {
+  const ts   = msg.cpd ? formatUsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23);
+  const dir  = msg.cpd?.dirName ?? (msg.recordType === 'EVENT' ? 'EVENT' : 'LOG');
+  const sop  = msg.cpd?.sopQualName ?? '';
+  const rev  = msg.header?.specRevision ?? '';
+  const mid  = msg.header?.msgId ?? '';
+  const type = msg.recordType === 'ASCII_LOG' ? 'ASCII_LOG'
+             : msg.recordType === 'EVENT'     ? (msg.eventName ?? 'EVENT')
+             : (msg.header?.typeName ?? '');
+  const ndo  = msg.header?.numDataObjects ?? '';
+  const body = msg.pdoSummary ?? msg.raw ?? '';
+  const raw  = msg.raw ? `DATA:${msg.raw}` : '';
+  return [msg.id, ts, dir, sop, rev, mid, type, ndo, body, raw].join('\t');
 }
+
+// Estimated row heights for virtualizer size hints
+const ROW_H        = 28;  // collapsed message row
+const CHILD_ROW_H  = 24;  // PDO / RDO child row
 
 export default function MessageTable() {
   const messages      = useAppStore((s) => s.messages);
   const clearMessages = useAppStore((s) => s.clearMessages);
 
-  // true = newest at bottom (chronological, default); false = newest at top
   const [newestAtBottom, setNewestAtBottom] = useState(true);
-  // false = show parsed/summary (default); true = show raw hex
-  const [showRaw, setShowRaw] = useState(false);
-  // true = user has scrolled up and is reading history
-  const [userScrolled, setUserScrolled] = useState(false);
-  const bottomRef  = useRef(null);
+  const [showRaw,        setShowRaw]        = useState(false);
+  const [userScrolled,   setUserScrolled]   = useState(false);
+  const [selectedIds,    setSelectedIds]    = useState(new Set());
+  const [anchorId,       setAnchorId]       = useState(null);
+  const [contextMenu,    setContextMenu]    = useState(null);
+  // expanded state lifted here so rows survive virtual-scroll unmount
+  const [expandedIds,    setExpandedIds]    = useState(new Set());
+
   const wrapperRef = useRef(null);
 
   const rows = useMemo(
@@ -321,25 +349,122 @@ export default function MessageTable() {
     [messages, newestAtBottom]
   );
 
+  // O(n) forward scan: build a map from Request msg.id → resolved source PDO.
+  // Replaces the per-row O(n) backward scan (which was O(n²) total).
+  const reqToSrcPdo = useMemo(() => {
+    const map = new Map();
+    let lastSrcDOs = null;
+    for (const msg of messages) {
+      const tn = msg.header?.typeName;
+      if ((tn === 'Source_Capabilities' || tn === 'EPR_Source_Capabilities') && msg.dataObjects?.length) {
+        lastSrcDOs = msg.dataObjects;
+      }
+      if ((tn === 'Request' || tn === 'EPR_Request') && lastSrcDOs && msg.dataObjects?.[0] != null) {
+        const objPos = (msg.dataObjects[0] >>> 28) & 0xF;
+        const pdoIdx = objPos - 1;
+        if (pdoIdx >= 0 && pdoIdx < lastSrcDOs.length) {
+          map.set(msg.id, { pdo: decodePDO(lastSrcDOs[pdoIdx], objPos), objPos });
+        }
+      }
+    }
+    return map;
+  }, [messages]);
+
+  // Estimate height per row for the virtualizer
+  const estimateSize = useCallback((i) => {
+    const msg = rows[i];
+    if (!msg) return ROW_H;
+    if (!expandedIds.has(msg.id)) return ROW_H;
+    const childCount   = msg.parsedPayload?.length ?? msg.dataObjects?.length ?? 0;
+    const resolvedExtra = reqToSrcPdo.has(msg.id) ? 1 : 0;
+    return ROW_H + (childCount + resolvedExtra) * CHILD_ROW_H;
+  }, [rows, expandedIds, reqToSrcPdo]);
+
+  const virtualizer = useVirtualizer({
+    count:           rows.length,
+    getScrollElement: () => wrapperRef.current,
+    estimateSize,
+    overscan:        20,
+  });
+
+  const virtualItems  = virtualizer.getVirtualItems();
+  const totalSize     = virtualizer.getTotalSize();
+  const paddingTop    = virtualItems.length > 0 ? virtualItems[0].start                               : 0;
+  const paddingBottom = virtualItems.length > 0 ? totalSize - virtualItems[virtualItems.length - 1].end : 0;
+
+  // Toggle a row's expanded state
+  const toggleExpanded = useCallback((id) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const copySelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const text = rows.filter((m) => selectedIds.has(m.id)).map(formatMsgForCopy).join('\n');
+    navigator.clipboard.writeText(text).catch(() => {});
+  }, [selectedIds, rows]);
+
+  const handleRowClick = useCallback((msg, e) => {
+    if (e.shiftKey && anchorId != null) {
+      const ai = rows.findIndex((r) => r.id === anchorId);
+      const ci = rows.findIndex((r) => r.id === msg.id);
+      const [lo, hi] = ai <= ci ? [ai, ci] : [ci, ai];
+      setSelectedIds(new Set(rows.slice(lo, hi + 1).map((r) => r.id)));
+    } else {
+      setSelectedIds(new Set([msg.id]));
+      setAnchorId(msg.id);
+    }
+    setContextMenu(null);
+  }, [anchorId, rows]);
+
+  const handleRowContextMenu = useCallback((msg, e) => {
+    e.preventDefault();
+    if (!selectedIds.has(msg.id)) {
+      setSelectedIds(new Set([msg.id]));
+      setAnchorId(msg.id);
+    }
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, [selectedIds]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedIds.size > 0) copySelected();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [selectedIds, copySelected]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [contextMenu]);
+
   // Detect when user scrolls away from the bottom
   const handleScroll = useCallback(() => {
     const el = wrapperRef.current;
     if (!el) return;
-    // Consider "at bottom" when within 60px
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     setUserScrolled(!atBottom);
   }, []);
 
-  // Scroll to bottom imperatively
+  // Scroll to bottom
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ block: 'nearest' });
+    const el = wrapperRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
     setUserScrolled(false);
   }, []);
 
-  // Auto-scroll to bottom on new messages — only when user is NOT scrolled away
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (newestAtBottom && !userScrolled) {
-      bottomRef.current?.scrollIntoView({ block: 'nearest' });
+      const el = wrapperRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }
   }, [messages, newestAtBottom, userScrolled]);
 
@@ -355,45 +480,53 @@ export default function MessageTable() {
           className={styles.tableWrapper}
           onScroll={handleScroll}
         >
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th
-                className={styles.thSort}
-                onClick={() => setNewestAtBottom((v) => !v)}
-                title={newestAtBottom ? 'Newest at bottom — click to flip' : 'Newest at top — click to flip'}
-              >
-                Timestamp {newestAtBottom ? '↓' : '↑'}
-              </th>
-              <th>Dir / Role</th>
-              <th>SOP</th>
-              <th>Rev</th>
-              <th>MsgID</th>
-              <th>Type</th>
-              <th title="Number of Data Objects">#DO</th>
-              <th
-                className={styles.thRaw}
-                onClick={() => setShowRaw((v) => !v)}
-                title={showRaw ? 'Showing raw HEX — click for parsed view' : 'Showing parsed — click for raw HEX'}
-              >
-                {showRaw ? 'HEX ⇄' : 'Parsed ⇄'}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((msg, dispIdx) => (
-              <MessageRow
-                key={msg.id}
-                msg={msg}
-                msgIndexAsc={newestAtBottom ? dispIdx : messages.length - 1 - dispIdx}
-                allMessages={messages}
-                showRaw={showRaw}
-              />
-            ))}
-          </tbody>
-        </table>
-        <div ref={bottomRef} />
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th
+                  className={styles.thSort}
+                  onClick={() => setNewestAtBottom((v) => !v)}
+                  title={newestAtBottom ? 'Newest at bottom — click to flip' : 'Newest at top — click to flip'}
+                >
+                  Timestamp {newestAtBottom ? '↓' : '↑'}
+                </th>
+                <th>Dir / Role</th>
+                <th>SOP</th>
+                <th>Rev</th>
+                <th>MsgID</th>
+                <th>Type</th>
+                <th title="Number of Data Objects">#DO</th>
+                <th
+                  className={styles.thRaw}
+                  onClick={() => setShowRaw((v) => !v)}
+                  title={showRaw ? 'Showing raw HEX — click for parsed view' : 'Showing parsed — click for raw HEX'}
+                >
+                  {showRaw ? 'HEX ⇄' : 'Parsed ⇄'}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {paddingTop > 0 && <tr><td colSpan={9} style={{ height: paddingTop, padding: 0, border: 'none' }} /></tr>}
+              {virtualItems.map((vItem) => {
+                const msg = rows[vItem.index];
+                return (
+                  <MessageRow
+                    key={msg.id}
+                    msg={msg}
+                    resolvedSourcePdo={reqToSrcPdo.get(msg.id) ?? null}
+                    showRaw={showRaw}
+                    isSelected={selectedIds.has(msg.id)}
+                    expanded={expandedIds.has(msg.id)}
+                    onToggle={() => toggleExpanded(msg.id)}
+                    onSelect={(e) => handleRowClick(msg, e)}
+                    onContextMenu={(e) => handleRowContextMenu(msg, e)}
+                  />
+                );
+              })}
+              {paddingBottom > 0 && <tr><td colSpan={9} style={{ height: paddingBottom, padding: 0, border: 'none' }} /></tr>}
+            </tbody>
+          </table>
         </div>
         {userScrolled && newestAtBottom && (
           <button
@@ -404,9 +537,21 @@ export default function MessageTable() {
             ↓ Latest
           </button>
         )}
+        {contextMenu && (
+          <div
+            className={styles.contextMenu}
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className={styles.contextMenuItem}
+              onClick={() => { copySelected(); setContextMenu(null); }}
+            >
+              Copy {selectedIds.size} row{selectedIds.size !== 1 ? 's' : ''}
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
 }
-
-

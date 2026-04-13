@@ -9,7 +9,8 @@ const PDO_COLORS = {
   'Battery':  '#ffcc80',
   'Variable': '#b39ddb',
   'APDO_PPS': '#a5d6a7',
-  'APDO_AVS': '#f48fb1',
+  'APDO_AVS':     '#f48fb1',
+  'APDO_SPR_AVS': '#ce93d8',
 };
 
 function pdoLabel(pdo) {
@@ -21,14 +22,23 @@ function pdoLabel(pdo) {
     case 'Battery':  return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.wMax/1000).toFixed(0)}W`;
     case 'Variable': return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.iMa/1000).toFixed(2)}A`;
     case 'APDO_PPS': return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.iMa/1000).toFixed(2)}A`;
-    case 'APDO_AVS': return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${pdo.pdpW}W`;
-    default:         return pdo.raw ?? '—';
+    case 'APDO_AVS':     return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${pdo.pdpW}W`;
+    case 'APDO_SPR_AVS': {
+      const sfx = pdo.iMa_15_20 > 0
+        ? `${(pdo.iMa_9_15/1000).toFixed(2)}A (9–15V) / ${(pdo.iMa_15_20/1000).toFixed(2)}A (15–20V)`
+        : `${(pdo.iMa_9_15/1000).toFixed(2)}A (9–15V)`;
+      return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${sfx}`;
+    }
+    default:             return pdo.raw ?? '—';
   }
 }
 
 function pdoBadge(pdo) {
   if (!pdo) return '';
-  return pdo.pdoType === 'APDO_PPS' ? 'PPS' : pdo.pdoType === 'APDO_AVS' ? 'AVS' : pdo.pdoType;
+  return pdo.pdoType === 'APDO_PPS' ? 'PPS'
+    : pdo.pdoType === 'APDO_AVS' ? 'AVS'
+    : pdo.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
+    : pdo.pdoType;
 }
 
 // ── Contract voltage helper ──────────────────────────────────
@@ -70,13 +80,15 @@ function buildSourceItems(source) {
   }
 
   if (source.contract) {
-    const { pdo, objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA, capMismatch, rdoType } = source.contract;
+    const { pdo, objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA,
+            opPower_mW, limPower_mW, giveBack, capMismatch, rdoType } = source.contract;
     const isAdjustable = rdoType === 'PPS' || rdoType === 'AVS';
+    const isBattery    = rdoType === 'Battery';
     const voltStr = opVoltage_mV != null
       ? `${(opVoltage_mV / 1000).toFixed(2)} V`   // negotiated output voltage (PPS/AVS)
       : contractVoltStr(pdo);
-    const contractSummary = isAdjustable
-      ? `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`
+    const contractSummary = isBattery
+      ? `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opPower_mW / 1000).toFixed(2)} W`
       : `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`;
     items.push({
       key: 'Contract',
@@ -95,10 +107,19 @@ function buildSourceItems(source) {
               { key: 'Voltage',      value: voltStr },
             ]
         ),
-        { key: 'Op Current',  value: `${(opCurrent_mA / 1000).toFixed(2)} A` },
-        ...(!isAdjustable && maxCurrent_mA != null
-          ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
-          : []),
+        ...(isBattery
+          ? [
+              { key: 'Op Power',  value: `${(opPower_mW / 1000).toFixed(2)} W` },
+              { key: `${giveBack ? 'Min' : 'Max'} Power`, value: `${(limPower_mW / 1000).toFixed(2)} W` },
+            ]
+          : [
+              { key: 'Op Current',  value: `${(opCurrent_mA / 1000).toFixed(2)} A` },
+              ...(!isAdjustable && maxCurrent_mA != null
+                ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
+                : []),
+            ]
+        ),
+        ...(giveBack ? [{ key: 'GiveBack', value: '', color: '#90caf9' }] : []),
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
       ],
     });
@@ -140,11 +161,15 @@ function buildSinkItems(sink) {
   }
 
   if (sink.lastRequest) {
-    const { objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA, capMismatch, rdoType } = sink.lastRequest;
-    const isAdj = rdoType === 'PPS' || rdoType === 'AVS';
+    const { objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA,
+            opPower_mW, limPower_mW, giveBack, capMismatch, rdoType } = sink.lastRequest;
+    const isAdj    = rdoType === 'PPS' || rdoType === 'AVS';
+    const isBattery = rdoType === 'Battery';
     const rdoSummary = isAdj && opVoltage_mV != null
       ? `PDO#${objPos}  ${(opVoltage_mV / 1000).toFixed(2)} V / ${(opCurrent_mA / 1000).toFixed(2)} A`
-      : `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`;
+      : isBattery
+        ? `PDO#${objPos}  ${(opPower_mW / 1000).toFixed(2)} W`
+        : `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`;
     items.push({
       key: 'RDO',
       value: rdoSummary,
@@ -156,10 +181,19 @@ function buildSinkItems(sink) {
         ...(isAdj && opVoltage_mV != null
           ? [{ key: 'Out Voltage', value: `${(opVoltage_mV / 1000).toFixed(2)} V`, color: '#a5d6a7' }]
           : []),
-        { key: 'Op Current',  value: `${(opCurrent_mA  / 1000).toFixed(2)} A` },
-        ...(!isAdj && maxCurrent_mA != null
-          ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
-          : []),
+        ...(isBattery
+          ? [
+              { key: 'Op Power',  value: `${(opPower_mW / 1000).toFixed(2)} W` },
+              { key: `${giveBack ? 'Min' : 'Max'} Power`, value: `${(limPower_mW / 1000).toFixed(2)} W` },
+            ]
+          : [
+              { key: 'Op Current',  value: `${(opCurrent_mA  / 1000).toFixed(2)} A` },
+              ...(!isAdj && maxCurrent_mA != null
+                ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
+                : []),
+            ]
+        ),
+        ...(giveBack ? [{ key: 'GiveBack', value: '', color: '#90caf9' }] : []),
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
       ],
     });
@@ -333,20 +367,52 @@ export default function TopologyView() {
   const cableItems = useMemo(() => buildCableItems(eMarker), [eMarker]);
 
   const srcSub = (() => {
-    if (source.contract) {
-      const { pdo, opCurrent_mA } = source.contract;
-      const vStr = contractVoltStr(pdo);
-      const eprBadge = source.eprActive ? ' EPR' : '';
-      return `${vStr} / ${(opCurrent_mA / 1000).toFixed(2)} A  [${pdo?.pdoType ?? ''}]${eprBadge}`;
-    }
-    return source.connected ? (source.eprActive ? 'EPR' : 'PD') : '';
+    if (!source.contract) return source.connected ? (source.eprActive ? 'EPR' : 'PD') : '';
+    const { pdo, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = source.contract;
+    const isAdj     = rdoType === 'PPS' || rdoType === 'AVS';
+    const isBattery = rdoType === 'Battery';
+    const eprBadge  = source.eprActive ? ' EPR' : '';
+    // Actual output voltage confirmed by PS_RDY
+    const vStr = isAdj && opVoltage_mV != null
+      ? `${(opVoltage_mV / 1000).toFixed(2)} V`
+      : pdo?.pdoType === 'Fixed' && pdo?.vMv != null
+        ? `${(pdo.vMv / 1000).toFixed(2)} V`
+        : contractVoltStr(pdo);   // Variable/Battery: show range
+    // Output current setting
+    const iStr = isBattery
+      ? `${(opPower_mW  / 1000).toFixed(2)} W`
+      : `${(opCurrent_mA / 1000).toFixed(2)} A`;
+    return `${vStr} / ${iStr}${eprBadge}`;
   })();
+
   const snkSub = (() => {
-    if (sink.lastRequest) {
-      const eprBadge = sink.eprActive ? ' EPR' : '';
-      return `Req #${sink.lastRequest.objPos}  ${(sink.lastRequest.opCurrent_mA / 1000).toFixed(2)} A${eprBadge}`;
+    if (!sink.lastRequest) return sink.connected ? (sink.eprActive ? 'EPR' : 'PD') : '';
+    const { objPos, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = sink.lastRequest;
+    const isAdj     = rdoType === 'PPS' || rdoType === 'AVS';
+    const isBattery = rdoType === 'Battery';
+    const eprBadge  = sink.eprActive ? ' EPR' : '';
+    // Look up the source PDO to get exact voltage for Fixed/Variable
+    const srcPdo = source.capabilities[objPos - 1] ?? null;
+    const vMvFixed = srcPdo?.pdoType === 'Fixed' ? srcPdo.vMv : null;
+    // Requested voltage
+    const vStr = isAdj && opVoltage_mV != null
+      ? `${(opVoltage_mV / 1000).toFixed(2)} V`
+      : vMvFixed != null
+        ? `${(vMvFixed / 1000).toFixed(2)} V`
+        : srcPdo ? contractVoltStr(srcPdo) : '—';
+    // Requested power = V × I (or opPower_mW for Battery)
+    let pStr;
+    if (isBattery) {
+      pStr = `${(opPower_mW / 1000).toFixed(2)} W`;
+    } else if (opCurrent_mA != null) {
+      const vForPwr = isAdj ? opVoltage_mV : vMvFixed;
+      pStr = vForPwr != null
+        ? `${((vForPwr * opCurrent_mA) / 1e6).toFixed(2)} W`
+        : `${(opCurrent_mA / 1000).toFixed(2)} A`;
+    } else {
+      pStr = '—';
     }
-    return sink.connected ? (sink.eprActive ? 'EPR' : 'PD') : '';
+    return `${vStr} / ${pStr}${eprBadge}`;
   })();
 
   return (

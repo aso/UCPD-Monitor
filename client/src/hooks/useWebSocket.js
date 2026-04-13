@@ -24,7 +24,7 @@ function logUnknownRecords(records) {
 export function useWebSocket() {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
-  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames } = useAppStore();
+  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames, setImportStatus } = useAppStore();
 
   const handleMessage = useCallback(
     (evt) => {
@@ -43,7 +43,9 @@ export function useWebSocket() {
 
         case 'HISTORY': {
           // Sent by server on every (re)connect — rebuilds messages + topology from ring buffer
-          const records = payload.records ?? [];
+          const records  = payload.records ?? [];
+          const filename = payload.filename ?? null;
+          if (filename) setImportStatus({ filename });
           appendLog(`[WS] Replaying ${records.length} record(s) from server history…`);
           const allFrames = [];
           const unknowns  = [];

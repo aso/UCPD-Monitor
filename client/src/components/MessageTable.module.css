@@ -206,6 +206,34 @@
 }
 
 /* ── Resolved source PDO row (grandchild under RDO) ────────── */
+.rowSelected { background: #1c3a58 !important; }
+.rowSelected:hover { background: #22456b !important; }
+
+.childRowSelected { background: #0d2535 !important; }
+.childRowSelected:hover { background: #102d42 !important; }
+
+.contextMenu {
+  position: fixed;
+  background: #1e2535;
+  border: 1px solid #3a5080;
+  border-radius: 4px;
+  padding: 4px 0;
+  z-index: 1000;
+  min-width: 160px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.55);
+}
+.contextMenuItem {
+  padding: 6px 16px;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 12px;
+  user-select: none;
+}
+.contextMenuItem:hover {
+  background: #2a3a5a;
+  color: #fff;
+}
+
 .resolvedPdoRow {
   background: #060f17 !important;
 }

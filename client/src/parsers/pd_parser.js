@@ -285,7 +285,39 @@ export function parseRawFrame(hexStr, source) {
               : null,
       pdoSummary: (header.typeName === 'Source_Info' && dataObjects.length)
         ? decodeSIDO(dataObjects[0]).label
-        : undefined,
+        : (header.typeName === 'BIST' && dataObjects.length)
+          ? (() => {
+              const BIST_TYPE = { 0: 'Carrier Mode 2', 5: 'Test Data', 8: 'Shared Mode Entry', 9: 'Shared Mode Exit' };
+              return `BIST: ${BIST_TYPE[(dataObjects[0] >>> 28) & 0xF] ?? 'Reserved'}`;
+            })()
+          : (header.typeName === 'Alert' && dataObjects.length)
+            ? (() => {
+                const dw = dataObjects[0];
+                const flags = [];
+                if (dw & (1 << 26)) flags.push('SrcInChange');
+                if (dw & (1 << 25)) flags.push('BatChange');
+                if (dw & (1 << 24)) flags.push('OCP');
+                if (dw & (1 << 23)) flags.push('OTP');
+                if (dw & (1 << 22)) flags.push('OpCondChange');
+                if (dw & (1 << 31)) flags.push('Extended');
+                return `Alert: ${flags.join(' | ') || '(none)'}`;
+              })()
+            : (header.typeName === 'Battery_Status' && dataObjects.length)
+              ? (() => {
+                  const dw = dataObjects[0];
+                  const bpc = (dw >>> 16) & 0xFFFF;
+                  const st = (dw & 1) ? 'InvalidRef'
+                    : (dw & 4) ? 'FullyDischarged'
+                    : (dw & 8) ? 'FullyCharged'
+                    : (dw & 2) ? 'Charging' : 'Idle';
+                  return `BatStatus: ${st}  Cap:${bpc === 0xFFFF ? 'Unknown' : `${bpc * 10}mWh`}`;
+                })()
+              : (header.typeName === 'Revision' && dataObjects.length)
+                ? (() => {
+                    const dw = dataObjects[0];
+                    return `Rev ${(dw>>>28)&0xF}.${(dw>>>24)&0xF}  Ver ${(dw>>>12)&0xF}.${(dw>>>8)&0xF}`;
+                  })()
+                : undefined,
     };
   } catch (e) {
     console.warn('[pd_parser] Parse error:', e.message, hexStr);
@@ -319,20 +351,27 @@ function fmtA(ma) {
  */
 export function buildPdoSummary(typeName, dataObjects) {
   if (!dataObjects?.length) return '';
+  const isSink = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
   return dataObjects.map((dw, i) => {
-    const pdo = decodePDO(dw, i);
+    const pdo = decodePDO(dw, i, isSink);
     const n   = pdo.index;
     switch (pdo.pdoType) {
       case 'Fixed':
         return `[${n}] Fixed:${fmtV(pdo.vMv)}/${fmtA(pdo.iMa)}`;
       case 'Battery':
-        return `[${n}] Battery:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${(pdo.wMax/1000).toFixed(0)}W`;
+        return `[${n}] Battery:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${pdo.isSink ? 'Op' : 'Max'}:${(pdo.wMax/1000).toFixed(0)}W`;
       case 'Variable':
         return `[${n}] Var:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${fmtA(pdo.iMa)}`;
       case 'APDO_PPS':
         return `[${n}] PPS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${fmtA(pdo.iMa)}`;
       case 'APDO_AVS':
         return `[${n}] AVS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${pdo.pdpW}W`;
+      case 'APDO_SPR_AVS': {
+        const sfx = pdo.iMa_15_20 > 0
+          ? `${fmtA(pdo.iMa_9_15)}│${fmtA(pdo.iMa_15_20)}`
+          : fmtA(pdo.iMa_9_15);
+        return `[${n}] SPR-AVS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${sfx}`;
+      }
       default:
         return `[${n}] ?:${pdo.raw}`;
     }
@@ -350,10 +389,13 @@ export function buildPdoSummary(typeName, dataObjects) {
 export function buildRdoSummary(dw, pdoType = 'Fixed') {
   const rdo = decodeRDO(dw, pdoType);
   let parts;
-  if (pdoType === 'APDO_PPS' || pdoType === 'APDO_AVS') {
+  if (pdoType === 'APDO_PPS' || pdoType === 'APDO_AVS' || pdoType === 'APDO_SPR_AVS') {
     parts = [`PDO#${rdo.objPos}`, `Out:${fmtV(rdo.opVoltage_mV)}`, `Op:${fmtA(rdo.opCurrent_mA)}`];
+  } else if (rdo.rdoType === 'Battery') {
+    parts = [`PDO#${rdo.objPos}`, `Op:${(rdo.opPower_mW/1000).toFixed(2)}W`, `${rdo.giveBack ? 'Min' : 'Max'}:${(rdo.limPower_mW/1000).toFixed(2)}W`];
   } else {
-    parts = [`PDO#${rdo.objPos}`, `Op:${fmtA(rdo.opCurrent_mA)}`, `Max:${fmtA(rdo.maxCurrent_mA)}`];
+    // Fixed / Variable / APDO_SPR_AVS all use Fixed/Variable RDO format
+    parts = [`PDO#${rdo.objPos}`, `Op:${fmtA(rdo.opCurrent_mA)}`, `${rdo.giveBack ? 'Min' : 'Max'}:${fmtA(rdo.maxCurrent_mA)}`];
   }
   if (rdo.capMismatch) parts.push('CapMismatch');
   if (rdo.eprMode)     parts.push('EPR');
@@ -369,7 +411,16 @@ export function buildRdoSummary(dw, pdoType = 'Fixed') {
  * @param {number} index 0-based PDO index (for display)
  * @returns {object}     Decoded PDO with type-specific fields
  */
-export function decodePDO(dw, index) {
+/**
+ * Decode a single PDO data object word.
+ * USB PD Rev 3.2, §6.4.1
+ *
+ * @param {number}  dw     Unsigned 32-bit PDO value
+ * @param {number}  index  0-based PDO index (for display)
+ * @param {boolean} [isSink=false]  True when decoding Sink_Capabilities / EPR_Sink_Capabilities
+ * @returns {object}  Decoded PDO with type-specific fields
+ */
+export function decodePDO(dw, index, isSink = false) {
   const pdoType = (dw >>> 30) & 0x3;
 
   const base = { index: index + 1, raw: `0x${dw.toString(16).toUpperCase().padStart(8, '0')}` };
@@ -378,11 +429,39 @@ export function decodePDO(dw, index) {
     // Fixed Supply
     const vMv  = ((dw >>> 10) & 0x3FF) * 50;
     const iMa  = (dw & 0x3FF) * 10;
+    if (isSink) {
+      // Table 6.17 — Sink Fixed Supply PDO
+      // B29=DRP, B28=HigherCapability, B27=UCPwr, B26=USB-Comm, B25=DRD
+      // B24..23=Fast Role Swap USB Type-C Current (2-bit), B22..20=Reserved
+      const FRS_LABELS = [
+        'FRS not supported',
+        'FRS: Default USB Power',
+        'FRS: 1.5A @ 5V',
+        'FRS: 3.0A @ 5V',
+      ];
+      const fastRoleSwap = (dw >>> 23) & 0x3;
+      return {
+        ...base,
+        pdoType: 'Fixed',
+        isSink: true,
+        vMv, iMa,
+        dualRolePower:      !!(dw & (1 << 29)),
+        higherCapability:   !!(dw & (1 << 28)),
+        unconstrainedPower: !!(dw & (1 << 27)),
+        usbCommsCapable:    !!(dw & (1 << 26)),
+        dualRoleData:       !!(dw & (1 << 25)),
+        fastRoleSwap,
+        fastRoleSwapLabel:  FRS_LABELS[fastRoleSwap],
+        label: `Fixed ${fmtV(vMv)} / ${fmtA(iMa)}`,
+      };
+    }
+    // Table 6-7 — Source Fixed Supply PDO
+    // B29=DRP, B28=USB-Susp, B27=UCPwr, B26=USB-Comm, B25=DRD, B24=UnchukedExt, B23=EPR
     return {
       ...base,
       pdoType: 'Fixed',
+      isSink: false,
       vMv, iMa,
-      // Capability flags (Source side; bits may differ for Sink)
       dualRolePower:       !!(dw & (1 << 29)),
       usbSuspend:          !!(dw & (1 << 28)),
       unconstrainedPower:  !!(dw & (1 << 27)),
@@ -395,28 +474,38 @@ export function decodePDO(dw, index) {
   }
 
   if (pdoType === 0b01) {
-    // Battery
+    // Battery Supply — Table 6.19 (Sink) / Source equivalent
+    // Bit layout identical for Source and Sink; semantic differs:
+    //   Source  B9..0 = Maximum Allowable Power in 250mW units
+    //   Sink    B9..0 = Operational Power in 250mW units
     const vMaxMv = ((dw >>> 20) & 0x3FF) * 50;
     const vMinMv = ((dw >>> 10) & 0x3FF) * 50;
     const wMax   = (dw & 0x3FF) * 250;
+    const powerLabel = isSink ? 'Op' : 'Max';
     return {
       ...base,
       pdoType: 'Battery',
+      isSink,
       vMaxMv, vMinMv, wMax,
-      label: `Battery ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${(wMax/1000).toFixed(0)}W`,
+      label: `Battery ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${powerLabel}:${(wMax/1000).toFixed(0)}W`,
     };
   }
 
   if (pdoType === 0b10) {
-    // Variable Supply (non-battery)
+    // Variable Supply (non-Battery) — Table 6.18 (Sink) / Source equivalent
+    // Bit layout identical for Source and Sink; semantic differs:
+    //   Source  B9..0 = Maximum Current in 10mA units
+    //   Sink    B9..0 = Operational Current in 10mA units
     const vMaxMv = ((dw >>> 20) & 0x3FF) * 50;
     const vMinMv = ((dw >>> 10) & 0x3FF) * 50;
-    const iMa   = (dw & 0x3FF) * 10;
+    const iMa    = (dw & 0x3FF) * 10;
+    const currentLabel = isSink ? 'Op' : 'Max';
     return {
       ...base,
       pdoType: 'Variable',
+      isSink,
       vMaxMv, vMinMv, iMa,
-      label: `Variable ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${fmtA(iMa)}`,
+      label: `Variable ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${currentLabel}:${fmtA(iMa)}`,
     };
   }
 
@@ -424,39 +513,74 @@ export function decodePDO(dw, index) {
   const apdoType = (dw >>> 28) & 0x3;
 
   if (apdoType === 0b00) {
-    // PPS (Programmable Power Supply)
+    // SPR PPS (Programmable Power Supply) — Table 6.20 (Sink) / Table 6.9 (Source)
+    // Bit layout and field semantics are identical for Source and Sink:
+    //   B24..17 = Vmax in 100mV, B15..8 = Vmin in 100mV, B6..0 = Max Current in 50mA
     const vMaxMv = ((dw >>> 17) & 0xFF) * 100;
     const vMinMv = ((dw >>> 8)  & 0xFF) * 100;
-    const iMa   = (dw & 0x7F) * 50;
-    const ppsType = (dw >>> 28) & 0x3;  // always 0 here
+    const iMa    = (dw & 0x7F) * 50;
     return {
       ...base,
       pdoType: 'APDO_PPS',
+      isSink,
       vMaxMv, vMinMv, iMa,
       label: `PPS ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${fmtA(iMa)}`,
     };
   }
 
-  if (apdoType === 0b01) {
-    // EPR AVS (Adjustable Voltage Supply) — Rev 3.2 Table 6.14
-    // B27..26 = Peak Current, B25..17 = Vmax/100mV, B16 = Rsvd, B15..8 = Vmin/100mV, B7..0 = PDP/W
-    const peakCurrent = (dw >>> 26) & 0x3;  // Table 6.15
-    const vMaxMv = ((dw >>> 17) & 0x1FF) * 100;
-    const vMinMv = ((dw >>> 8)  & 0xFF)  * 100;
-    const pdpW   = (dw & 0xFF);
-    // Table 6.15 human-readable labels
+  if (apdoType === 0b10) {
+    // SPR AVS (Adjustable Voltage Supply) — Rev 3.2 Table 6.16 — Source only
+    // (No SPR AVS APDO is defined for Sink in USB PD Rev 3.2)
+    // B27..26 = Peak Current, B25..20 = Reserved
+    // B19..10 = Max Current 9V–15V range (10mA units)
+    // B9..0   = Max Current 15V–20V range (10mA units); 0 if max voltage is 15V
+    const peakCurrent  = (dw >>> 26) & 0x3;
+    const iMa_9_15     = ((dw >>> 10) & 0x3FF) * 10;
+    const iMa_15_20    = (dw & 0x3FF) * 10;
+    const vMinMv       = 9000;
+    const vMaxMv       = iMa_15_20 > 0 ? 20000 : 15000;
     const PEAK_CURRENT_LABEL = [
       'Peak = IOC (default)',
       'Peak 150%/1ms, 125%/2ms, 110%/10ms',
       'Peak 200%/1ms, 150%/2ms, 125%/10ms',
       'Peak 200%/1ms, 175%/2ms, 150%/10ms',
     ];
+    const labelSuffix = iMa_15_20 > 0
+      ? `${fmtA(iMa_9_15)} (9–15V) / ${fmtA(iMa_15_20)} (15–20V)`
+      : `${fmtA(iMa_9_15)} (9–15V)`;
+    return {
+      ...base,
+      pdoType: 'APDO_SPR_AVS',
+      isSink: false,
+      vMinMv, vMaxMv,
+      iMa_9_15, iMa_15_20,
+      peakCurrent,
+      peakCurrentLabel: PEAK_CURRENT_LABEL[peakCurrent],
+      label: `SPR-AVS ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${labelSuffix}`,
+    };
+  }
+
+  if (apdoType === 0b01) {
+    // EPR AVS (Adjustable Voltage Supply) — Table 6.21 (Sink) / Table 6.14 (Source)
+    // Common: B25..17 = Vmax/100mV, B16=Rsvd, B15..8 = Vmin/100mV, B7..0 = PDP/W
+    // Source only: B27..26 = Peak Current (Table 6.15); Sink: B27..26 = Reserved
+    const vMaxMv = ((dw >>> 17) & 0x1FF) * 100;
+    const vMinMv = ((dw >>> 8)  & 0xFF)  * 100;
+    const pdpW   = (dw & 0xFF);
+    const PEAK_CURRENT_LABEL = [
+      'Peak = IOC (default)',
+      'Peak 150%/1ms, 125%/2ms, 110%/10ms',
+      'Peak 200%/1ms, 150%/2ms, 125%/10ms',
+      'Peak 200%/1ms, 175%/2ms, 150%/10ms',
+    ];
+    const peakCurrent      = isSink ? null : (dw >>> 26) & 0x3;
+    const peakCurrentLabel = isSink ? null : PEAK_CURRENT_LABEL[peakCurrent];
     return {
       ...base,
       pdoType: 'APDO_AVS',
+      isSink,
       vMaxMv, vMinMv, pdpW,
-      peakCurrent,
-      peakCurrentLabel: PEAK_CURRENT_LABEL[peakCurrent],
+      ...(peakCurrent !== null ? { peakCurrent, peakCurrentLabel } : {}),
       label: `AVS ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${pdpW}W`,
     };
   }
@@ -514,13 +638,16 @@ export function decodeRDO(dw, pdoType = 'Fixed') {
   const usbComms     = !!(dw & (1 << 25));
   const noUsbSuspend = !!(dw & (1 << 24));
   const unchunkedExt = !!(dw & (1 << 23));
+  const eprMode      = !!(dw & (1 << 22));
 
   if (pdoType === 'APDO_PPS') {
-    // Table 6.22 — PPS RDO
-    const opVoltage_mV  = ((dw >>> 9) & 0x7FF) * 20;
-    const opCurrent_mA  = (dw & 0x7F) * 50;
+    // Table 6.26 — PPS Request Data Object
+    // B27=Rsvd, B26=CapMismatch, B25=UsbComms, B24=NoUsbSuspend, B23=UnchunkedExt, B22=EPRMode
+    // B21=Rsvd, B20..9=OutputVoltage/20mV (12 bits), B8..7=Rsvd, B6..0=OpCurrent/50mA
+    const opVoltage_mV = ((dw >>> 9) & 0xFFF) * 20;
+    const opCurrent_mA = (dw & 0x7F) * 50;
     return {
-      raw, objPos, capMismatch, usbComms, noUsbSuspend, unchunkedExt,
+      raw, objPos, capMismatch, usbComms, noUsbSuspend, unchunkedExt, eprMode,
       rdoType: 'PPS',
       opVoltage_mV,
       opCurrent_mA,
@@ -528,30 +655,53 @@ export function decodeRDO(dw, pdoType = 'Fixed') {
     };
   }
 
-  if (pdoType === 'APDO_AVS') {
-    // Table 6.35 — EPR AVS RDO
-    const opVoltage_mV  = ((dw >>> 9) & 0x7FF) * 25;
-    const opCurrent_mA  = (dw & 0x7F) * 50;
+  if (pdoType === 'APDO_AVS' || pdoType === 'APDO_SPR_AVS') {
+    // Table 6.27 — AVS Request Data Object (EPR AVS and SPR AVS both use this format)
+    // B27=Rsvd, B26=CapMismatch, B25=UsbComms, B24=NoUsbSuspend, B23=UnchunkedExt, B22=EPRMode
+    // B21=Rsvd, B20..9=OutputVoltage/25mV (12 bits, LSB2 shall be zero → effective 100mV step)
+    // B8..7=Rsvd, B6..0=OpCurrent/50mA
+    const opVoltage_mV = ((dw >>> 9) & 0xFFF) * 25;
+    const opCurrent_mA = (dw & 0x7F) * 50;
+    const tag = pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS' : 'AVS';
     return {
-      raw, objPos, capMismatch, usbComms, noUsbSuspend, unchunkedExt,
+      raw, objPos, capMismatch, usbComms, noUsbSuspend, unchunkedExt, eprMode,
       rdoType: 'AVS',
       opVoltage_mV,
       opCurrent_mA,
-      label: `RDO(AVS) → PDO#${objPos}  Out:${fmtV(opVoltage_mV)}  Op:${fmtA(opCurrent_mA)}`,
+      label: `RDO(${tag}) → PDO#${objPos}  Out:${fmtV(opVoltage_mV)}  Op:${fmtA(opCurrent_mA)}`,
     };
   }
 
-  // Fixed / Variable / Battery RDO — Table 6.19
+  if (pdoType === 'Battery') {
+    // Table 6.24 / 6.25 — Battery Request Data Object
+    // B27=GiveBack, B26=CapMismatch, B25=UsbComms, B24=NoUsbSuspend, B23=UnchunkedExt, B22=EPRMode
+    // B19..10=OperatingPower/250mW, B9..0=MaxOperatingPower(GiveBack=0)/MinOperatingPower(GiveBack=1)/250mW
+    const giveBack     = !!(dw & (1 << 27));
+    const opPower_mW   = ((dw >>> 10) & 0x3FF) * 250;
+    const limPower_mW  = (dw & 0x3FF) * 250;
+    const limLabel     = giveBack ? 'Min' : 'Max';
+    return {
+      raw, objPos, giveBack, capMismatch, usbComms, noUsbSuspend, unchunkedExt, eprMode,
+      rdoType: 'Battery',
+      opPower_mW,
+      limPower_mW,
+      label: `RDO(Bat) → PDO#${objPos}  Op:${(opPower_mW/1000).toFixed(2)}W  ${limLabel}:${(limPower_mW/1000).toFixed(2)}W`,
+    };
+  }
+
+  // Fixed / Variable Request Data Object — Table 6.22 / 6.23
+  // B27=GiveBack, B26=CapMismatch, B25=UsbComms, B24=NoUsbSuspend, B23=UnchunkedExt, B22=EPRMode
+  // B19..10=OperatingCurrent/10mA, B9..0=MaxOperatingCurrent(GiveBack=0)/MinOperatingCurrent(GiveBack=1)/10mA
   const giveBack      = !!(dw & (1 << 27));
-  const eprMode       = !!(dw & (1 << 22));
   const opCurrent_mA  = ((dw >>> 10) & 0x3FF) * 10;
   const maxCurrent_mA = (dw & 0x3FF) * 10;
+  const limLabel      = giveBack ? 'Min' : 'Max';
   return {
     raw, objPos, giveBack, capMismatch, usbComms, noUsbSuspend, unchunkedExt, eprMode,
     rdoType: 'Fixed',
     opCurrent_mA,
     maxCurrent_mA,
-    label: `RDO → PDO#${objPos}  Op:${fmtA(opCurrent_mA)}  Max:${fmtA(maxCurrent_mA)}`,
+    label: `RDO → PDO#${objPos}  Op:${fmtA(opCurrent_mA)}  ${limLabel}:${fmtA(maxCurrent_mA)}`,
   };
 }
 
@@ -741,8 +891,10 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
     case 'Source_Capabilities':
     case 'Sink_Capabilities':
     case 'EPR_Source_Capabilities':
-    case 'EPR_Sink_Capabilities':
-      return dataObjects.map((dw, i) => decodePDO(dw, i));
+    case 'EPR_Sink_Capabilities': {
+      const isSinkCap = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
+      return dataObjects.map((dw, i) => decodePDO(dw, i, isSinkCap));
+    }
 
     case 'Request':
       return [decodeRDO(dataObjects[0], srcPdoType ?? 'Fixed')];
@@ -866,6 +1018,155 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       return [
         { label: headerLabel, raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}` },
         ...decodedVdos,
+      ];
+    }
+
+    case 'BIST': {
+      // Table 6.9 (USB PD Rev 3.2) – BIST Data Object (BDO)
+      // B31..28 = BIST Data Object Type
+      const BIST_TYPE = {
+        0: 'BIST Carrier Mode 2',
+        5: 'BIST Test Data',
+        8: 'BIST Shared Test Mode Entry',
+        9: 'BIST Shared Test Mode Exit',
+      };
+      const dw0   = dataObjects[0];
+      const bdoT  = (dw0 >>> 28) & 0xF;
+      const label = BIST_TYPE[bdoT] ?? `Reserved(${bdoT})`;
+      const raw0  = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
+      // B19..16 = Errored Data Blocks Counter (BIST Test Data mode only)
+      const rows = [{ label: 'BIST Mode', value: label, raw: raw0 }];
+      if (bdoT === 5) {
+        const counter = (dw0 >>> 16) & 0xF;
+        rows.push({ label: 'Error Counter', value: String(counter), raw: '' });
+      }
+      return rows;
+    }
+
+    case 'Battery_Status': {
+      // Table 6.41 (USB PD Rev 3.2) – Battery Status Data Object (BSDO)
+      // B31..16 = Battery Present Capacity (10 mWh, 0xFFFF = Unknown)
+      // B3 = Battery Fully Charged
+      // B2 = Battery Fully Discharged
+      // B1 = Battery is Charging
+      // B0 = Invalid Battery Reference
+      const dw0 = dataObjects[0];
+      const bpc = (dw0 >>> 16) & 0xFFFF;
+      const fullyCharged    = !!(dw0 & (1 << 3));
+      const fullyDischarged = !!(dw0 & (1 << 2));
+      const isCharging      = !!(dw0 & (1 << 1));
+      const invalidRef      = !!(dw0 & (1 << 0));
+      const raw0 = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
+      const bpcStr = bpc === 0xFFFF ? 'Unknown' : `${(bpc * 10).toLocaleString()} mWh`;
+      const statusStr = invalidRef      ? 'Invalid Reference'
+        : fullyDischarged ? 'Fully Discharged'
+        : fullyCharged    ? 'Fully Charged'
+        : isCharging      ? 'Charging'
+        : 'Idle';
+      return [
+        { label: 'Present Capacity', value: bpcStr,    raw: raw0 },
+        { label: 'Status',           value: statusStr, raw: '' },
+      ];
+    }
+
+    case 'Alert': {
+      // Table 6.44 (USB PD Rev 3.2) – Alert Data Object (ADO)
+      // B31 = Extended Alert
+      // B26 = Source Input Change
+      // B25 = Battery Status Change
+      // B24 = Over-Current Protection (OCP)
+      // B23 = Over-Temperature Protection (OTP)
+      // B22 = Operating Condition Change
+      // B19..16 = Fixed Batteries Battery Status Bits (bat4..1)
+      // B3..0   = Hot-swappable Batteries Status Bits (bat4..1)
+      const dw0      = dataObjects[0];
+      const extended = !!(dw0 & (1 << 31));
+      const srcIn    = !!(dw0 & (1 << 26));
+      const batChg   = !!(dw0 & (1 << 25));
+      const ocp      = !!(dw0 & (1 << 24));
+      const otp      = !!(dw0 & (1 << 23));
+      const opChg    = !!(dw0 & (1 << 22));
+      const raw0     = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
+      const flags    = [];
+      if (srcIn)    flags.push('Source Input Change');
+      if (batChg)   flags.push('Battery Status Change');
+      if (ocp)      flags.push('OCP');
+      if (otp)      flags.push('OTP');
+      if (opChg)    flags.push('Operating Condition Change');
+      if (extended) flags.push('Extended');
+      const fixedBats = (dw0 >>> 16) & 0xF;
+      const hotBats   = dw0 & 0xF;
+      if (fixedBats) flags.push(`FixedBat[${[0,1,2,3].filter((b) => fixedBats & (1 << b)).map((b) => b + 1).join(',')}]`);
+      if (hotBats)   flags.push(`HotBat[${[0,1,2,3].filter((b) => hotBats & (1 << b)).map((b) => b + 1).join(',')}]`);
+      const rows = [{ label: 'Alert', value: flags.join('  ') || '(none)', raw: raw0 }];
+      // Extended alert: subsequent DOs carry additional alert data
+      for (let i = 1; i < dataObjects.length; i++) {
+        const w = dataObjects[i];
+        rows.push({ label: `Alert Data[${i}]`, value: `0x${w.toString(16).toUpperCase().padStart(8, '0')}`, raw: `0x${w.toString(16).toUpperCase().padStart(8, '0')}` });
+      }
+      return rows;
+    }
+
+    case 'Get_Country_Info': {
+      // Section 6.4.7 (USB PD Rev 3.2) – Country_Code Data Object
+      // B31..16 = Country Code (2 ASCII chars, e.g. 'US', 'JP')
+      // B15..0  = Reserved
+      return dataObjects.map((dw, i) => {
+        const hi  = (dw >>> 24) & 0xFF;
+        const lo  = (dw >>> 16) & 0xFF;
+        const cc  = hi >= 0x20 && lo >= 0x20
+          ? String.fromCharCode(hi) + String.fromCharCode(lo)
+          : `0x${((dw >>> 16) & 0xFFFF).toString(16).toUpperCase().padStart(4,'0')}`;
+        return {
+          label: i === 0 ? 'Country Code' : `Country Code[${i + 1}]`,
+          value: cc,
+          raw: `0x${dw.toString(16).toUpperCase().padStart(8, '0')}`,
+        };
+      });
+    }
+
+    case 'Enter_USB': {
+      // Table 6.48 (USB PD Rev 3.2) – Enter_USB Data Object (EUDO)
+      // B29..27 = USB Mode
+      // B26     = Ethernet Capable
+      // B25     = DRD (Dual Role Data)
+      // B24     = Host Capable
+      // B23     = MUX Controller Present
+      // B22     = Cable Type (0=Passive, 1=Active)
+      // B21     = EPR Cable Capable
+      // B20     = Modal Operation Supported
+      // B16     = HPD Level High
+      const USB_MODE = { 0: 'USB 2.0', 1: 'USB 3.2', 2: 'USB4 Gen2 (20G)', 3: 'USB4 Gen3 (40G)', 4: 'USB4 Gen4 (80G)' };
+      const dw0  = dataObjects[0];
+      const mode = (dw0 >>> 27) & 0x7;
+      const raw0 = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
+      const rows = [
+        { label: 'USB Mode',   value: USB_MODE[mode] ?? `Mode${mode}`, raw: raw0 },
+        { label: 'Cable Type', value: (dw0 & (1 << 22)) ? 'Active' : 'Passive', raw: '' },
+      ];
+      if  (dw0 & (1 << 26)) rows.push({ label: 'Ethernet',         value: 'Capable', raw: '' });
+      if  (dw0 & (1 << 25)) rows.push({ label: 'DRD',              value: 'Yes',     raw: '' });
+      if  (dw0 & (1 << 24)) rows.push({ label: 'Host Capable',     value: 'Yes',     raw: '' });
+      if  (dw0 & (1 << 23)) rows.push({ label: 'MUX Controller',   value: 'Present', raw: '' });
+      if  (dw0 & (1 << 21)) rows.push({ label: 'EPR Cable',        value: 'Capable', raw: '' });
+      if  (dw0 & (1 << 20)) rows.push({ label: 'Modal Operation',  value: 'Supported', raw: '' });
+      if  (dw0 & (1 << 16)) rows.push({ label: 'HPD',              value: 'High',    raw: '' });
+      return rows;
+    }
+
+    case 'Revision': {
+      // Table 6.53 (USB PD Rev 3.2) – Revision Data Object
+      // B31..28 = Major Revision (BCD), B27..24 = Minor Revision (BCD)
+      // B15..12 = Major Version (BCD),  B11..8  = Minor Version (BCD)
+      const dw0      = dataObjects[0];
+      const revMajor = (dw0 >>> 28) & 0xF;
+      const revMinor = (dw0 >>> 24) & 0xF;
+      const verMajor = (dw0 >>> 12) & 0xF;
+      const verMinor = (dw0 >>>  8) & 0xF;
+      const raw0     = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
+      return [
+        { label: 'PD Revision', value: `${revMajor}.${revMinor}`, raw: raw0 },
+        { label: 'PD Version',  value: `${verMajor}.${verMinor}`, raw: '' },
       ];
     }
 
@@ -1167,6 +1468,7 @@ const DECODED_MSG_TYPES = new Set([
   'Source_Capabilities', 'Sink_Capabilities',
   'EPR_Source_Capabilities', 'EPR_Sink_Capabilities',
   'Request', 'EPR_Request', 'EPR_Mode', 'Source_Info', 'Vendor_Defined',
+  'BIST', 'Battery_Status', 'Alert', 'Get_Country_Info', 'Enter_USB', 'Revision',
   // Extended messages
   'Source_Capabilities_Extended', 'Status',
   'Extended_Control', 'Sink_Capabilities_Extended',

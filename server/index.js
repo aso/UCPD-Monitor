@@ -62,9 +62,15 @@ let activePort   = null;   // SerialPort instance
 let activeParser = null;   // CpdStreamParser instance
 let serialStatus = { connected: false, port: null, baudRate: null };
 
-// ----- CPD record history (ring buffer for browser reload replay) -----
-const MAX_HISTORY = 5000;
+// ----- CPD record history (ring buffer for live serial replay on browser reload) -----
+const MAX_HISTORY = 50000;
 const recordHistory = [];  // Array of { hex: string, ts: number }
+
+// ----- File import state (bypasses ring buffer) -----
+// Non-null while the last load was a file import (not live serial).
+// Cleared when a live serial port opens so serial data takes over.
+let importedRecords  = null;  // Array<{hex, ts}> | null
+let importedFilename = null;  // string | null
 
 // ----- Session .cpd file save (one timestamped file per session) -----
 let sessionFileStream = null;  // current fs.WriteStream
@@ -168,7 +174,9 @@ function disconnectSerial(reason) {
 function connectSerial(portPath, baudRate) {
   if (activePort) disconnectSerial('superseded');
 
-  // Flush history on every new connection
+  // Clear import state and flush live ring buffer on every new connection
+  importedRecords  = null;
+  importedFilename = null;
   recordHistory.length = 0;
   resetSessionFile();
 
@@ -298,8 +306,10 @@ wss.on('connection', (ws, req) => {
   ws.send(JSON.stringify({ type: 'WELCOME', ts: Date.now(), version: '1.0.0' }));
   ws.send(JSON.stringify({ type: 'SERIAL_STATUS', ...serialStatus }));
   ws.send(JSON.stringify({ type: 'PORT_LIST', ports: _cachedPorts }));
-  // Replay history so reloaded browser pages can rebuild their state
-  ws.send(JSON.stringify({ type: 'HISTORY', records: recordHistory }));
+  // Replay history so reloaded browser pages can rebuild their state.
+  // If a file was imported, replay that directly (importedRecords takes priority).
+  const replayRecords = importedRecords ?? recordHistory;
+  ws.send(JSON.stringify({ type: 'HISTORY', records: replayRecords, filename: importedFilename ?? null }));
 });
 
 // ----- REST API -----
@@ -350,41 +360,41 @@ app.post('/api/ingest', (req, res) => {
 
 // ----- Import a .cpd file from the client (POST /api/import-cpd) -----
 // Body: raw binary (application/octet-stream)
-// Server feeds the bytes through CpdStreamParser, rebuilds ring buffer, then
-// broadcasts HISTORY to all WS clients — same path as browser-reload replay.
+// Parses raw bytes directly through CpdStreamParser and broadcasts HISTORY.
+// The ring buffer (recordHistory) is NOT touched — import data is kept separately
+// so live serial history and file-import history never mix.
 app.post('/api/import-cpd', (req, res) => {
+  const filename = req.headers['x-filename'] ?? null;
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
     const raw = Buffer.concat(chunks);
     if (!raw.length) return res.status(400).json({ error: 'empty body' });
 
-    // Flush existing data and start a fresh session file
-    recordHistory.length = 0;
+    // Open a fresh session file to record the imported content
     resetSessionFile();
 
-    // Feed all bytes through a fresh CpdStreamParser (synchronous via EventEmitter)
+    // Parse directly — no ring buffer involved, no DETACHED flush
+    const records = [];
     const parser = new CpdStreamParser();
     parser.on('frame', (buf) => {
-      const eventType = cpdEventType(buf);
-      if (eventType === 'DETACHED') {
-        recordHistory.length = 0;
-      }
       if (sessionFileStream) sessionFileStream.write(buf);
       const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
-      const ts  = Date.now();
-      recordHistory.push({ hex, ts });
-      if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
+      records.push({ hex, ts: Date.now() });
     });
     parser.write(raw);
     parser.end();
 
-    console.log(`[Import] Loaded ${recordHistory.length} record(s) from uploaded .cpd`);
+    // Store for browser-reload replay (bypasses ring buffer)
+    importedRecords  = records;
+    importedFilename = filename;
 
-    // Push updated history to all connected clients
-    broadcast({ type: 'HISTORY', records: recordHistory });
+    console.log(`[Import] Loaded ${importedRecords.length} record(s) from "${filename ?? '(unknown)'}"`);
 
-    res.json({ ok: true, records: recordHistory.length });
+    // Push directly to all connected clients
+    broadcast({ type: 'HISTORY', records: importedRecords, filename: importedFilename });
+
+    res.json({ ok: true, records: importedRecords.length });
   });
   req.on('error', (err) => res.status(500).json({ error: err.message }));
 });

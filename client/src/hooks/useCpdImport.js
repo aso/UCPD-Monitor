@@ -47,7 +47,10 @@ export function useCpdImport() {
 
         const res = await fetch(IMPORT_URL, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/octet-stream' },
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Filename': names,
+          },
           body: merged,
         });
         if (!res.ok) throw new Error(`Server returned ${res.status}`);

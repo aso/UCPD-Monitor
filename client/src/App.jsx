@@ -50,7 +50,9 @@ export default function App() {
   const { sendPing, sendMessage }       = useWebSocket();
   const { openFilePicker, importFiles } = useCpdImport();
   const serialConnected                 = useSerialConnected();
-  const [dragging, setDragging]   = useState(false);
+  const [dragging, setDragging]     = useState(false);
+  const [showTopology, setShowTopology] = useState(true);
+  const [showConsole,  setShowConsole]  = useState(true);
 
   const onDragOver = useCallback((e) => {
     e.preventDefault();
@@ -101,11 +103,21 @@ export default function App() {
           title={serialConnected ? 'Disconnect DISCO before importing a .cpd file' : undefined}
         >.cpd Import</button>
         <button onClick={sendPing} className={styles.pingBtn} style={{ display: 'none' }}>Ping</button>
+        <button
+          className={`${styles.panelToggleBtn} ${showTopology ? styles.panelToggleActive : ''}`}
+          onClick={() => setShowTopology((v) => !v)}
+          title="Toggle Topology panel"
+        >Topology</button>
+        <button
+          className={`${styles.panelToggleBtn} ${showConsole ? styles.panelToggleActive : ''}`}
+          onClick={() => setShowConsole((v) => !v)}
+          title="Toggle Console panel"
+        >Console</button>
         <SerialBar sendMessage={sendMessage} />
       </header>
 
       {/* Topology strip */}
-      <TopologyView />
+      {showTopology && <TopologyView />}
 
       {/* Main area: message table */}
       <div className={styles.main}>
@@ -113,9 +125,11 @@ export default function App() {
       </div>
 
       {/* Console */}
-      <div className={styles.consoleArea}>
-        <Console />
-      </div>
+      {showConsole && (
+        <div className={styles.consoleArea}>
+          <Console />
+        </div>
+      )}
     </div>
   );
 }

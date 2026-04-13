@@ -311,19 +311,37 @@ export default function MessageTable() {
   const [newestAtBottom, setNewestAtBottom] = useState(true);
   // false = show parsed/summary (default); true = show raw hex
   const [showRaw, setShowRaw] = useState(false);
-  const bottomRef = useRef(null);
+  // true = user has scrolled up and is reading history
+  const [userScrolled, setUserScrolled] = useState(false);
+  const bottomRef  = useRef(null);
+  const wrapperRef = useRef(null);
 
   const rows = useMemo(
     () => newestAtBottom ? messages : [...messages].reverse(),
     [messages, newestAtBottom]
   );
 
-  // Auto-scroll to bottom when newest-at-bottom and messages change
+  // Detect when user scrolls away from the bottom
+  const handleScroll = useCallback(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    // Consider "at bottom" when within 60px
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    setUserScrolled(!atBottom);
+  }, []);
+
+  // Scroll to bottom imperatively
+  const scrollToBottom = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ block: 'nearest' });
+    setUserScrolled(false);
+  }, []);
+
+  // Auto-scroll to bottom on new messages — only when user is NOT scrolled away
   useEffect(() => {
-    if (newestAtBottom && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ block: 'nearest' });
+    if (newestAtBottom && !userScrolled) {
+      bottomRef.current?.scrollIntoView({ block: 'nearest' });
     }
-  }, [messages, newestAtBottom]);
+  }, [messages, newestAtBottom, userScrolled]);
 
   return (
     <section className={styles.wrapper}>
@@ -331,7 +349,12 @@ export default function MessageTable() {
         <span>Message Log ({messages.length})</span>
         <button onClick={clearMessages} className={styles.clearBtn}>Clear</button>
       </header>
-      <div className={styles.tableWrapper}>
+      <div className={styles.tableWrapperOuter}>
+        <div
+          ref={wrapperRef}
+          className={styles.tableWrapper}
+          onScroll={handleScroll}
+        >
         <table className={styles.table}>
           <thead>
             <tr>
@@ -371,6 +394,16 @@ export default function MessageTable() {
           </tbody>
         </table>
         <div ref={bottomRef} />
+        </div>
+        {userScrolled && newestAtBottom && (
+          <button
+            className={styles.jumpBtn}
+            onClick={scrollToBottom}
+            title="Jump to latest"
+          >
+            ↓ Latest
+          </button>
+        )}
       </div>
     </section>
   );

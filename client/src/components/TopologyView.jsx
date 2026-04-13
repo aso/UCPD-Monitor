@@ -70,19 +70,35 @@ function buildSourceItems(source) {
   }
 
   if (source.contract) {
-    const { pdo, objPos, opCurrent_mA, maxCurrent_mA, capMismatch } = source.contract;
-    const voltStr = contractVoltStr(pdo);
+    const { pdo, objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA, capMismatch, rdoType } = source.contract;
+    const isAdjustable = rdoType === 'PPS' || rdoType === 'AVS';
+    const voltStr = opVoltage_mV != null
+      ? `${(opVoltage_mV / 1000).toFixed(2)} V`   // negotiated output voltage (PPS/AVS)
+      : contractVoltStr(pdo);
+    const contractSummary = isAdjustable
+      ? `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`
+      : `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`;
     items.push({
       key: 'Contract',
-      value: `#${objPos} ${pdo?.pdoType ?? ''} · ${voltStr} / ${(opCurrent_mA / 1000).toFixed(2)} A`,
+      value: contractSummary,
       color: source.eprActive ? '#ffb74d' : '#4caf50',
       autoExpand: true,
       children: [
         { key: 'PDO Type',    value: pdo?.pdoType ?? '—', color: PDO_COLORS[pdo?.pdoType] },
         { key: 'PDO',         value: pdoLabel(pdo), color: PDO_COLORS[pdo?.pdoType] },
-        { key: 'Voltage',     value: voltStr },
+        ...(isAdjustable
+          ? [
+              { key: 'PDO Range',    value: contractVoltStr(pdo) },
+              { key: 'Out Voltage',  value: `${(opVoltage_mV / 1000).toFixed(2)} V`, color: '#a5d6a7' },
+            ]
+          : [
+              { key: 'Voltage',      value: voltStr },
+            ]
+        ),
         { key: 'Op Current',  value: `${(opCurrent_mA / 1000).toFixed(2)} A` },
-        { key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` },
+        ...(!isAdjustable && maxCurrent_mA != null
+          ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
+          : []),
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
       ],
     });
@@ -124,16 +140,26 @@ function buildSinkItems(sink) {
   }
 
   if (sink.lastRequest) {
-    const { objPos, opCurrent_mA, maxCurrent_mA, capMismatch } = sink.lastRequest;
+    const { objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA, capMismatch, rdoType } = sink.lastRequest;
+    const isAdj = rdoType === 'PPS' || rdoType === 'AVS';
+    const rdoSummary = isAdj && opVoltage_mV != null
+      ? `PDO#${objPos}  ${(opVoltage_mV / 1000).toFixed(2)} V / ${(opCurrent_mA / 1000).toFixed(2)} A`
+      : `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`;
     items.push({
       key: 'RDO',
-      value: `PDO#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)} A`,
+      value: rdoSummary,
       color: '#90caf9',
       autoExpand: true,
       children: [
         { key: 'Object Pos',  value: `#${objPos}` },
+        { key: 'RDO Type',    value: rdoType ?? 'Fixed' },
+        ...(isAdj && opVoltage_mV != null
+          ? [{ key: 'Out Voltage', value: `${(opVoltage_mV / 1000).toFixed(2)} V`, color: '#a5d6a7' }]
+          : []),
         { key: 'Op Current',  value: `${(opCurrent_mA  / 1000).toFixed(2)} A` },
-        { key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` },
+        ...(!isAdj && maxCurrent_mA != null
+          ? [{ key: 'Max Current', value: `${(maxCurrent_mA / 1000).toFixed(2)} A` }]
+          : []),
         ...(capMismatch ? [{ key: '⚠ CapMismatch', value: '', color: '#ff9800' }] : []),
       ],
     });

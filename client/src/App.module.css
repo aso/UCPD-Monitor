@@ -94,6 +94,23 @@
   color: #ffb74d;
 }
 
+.panelToggleBtn {
+  background: none;
+  border: 1px solid #444;
+  color: #777;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.panelToggleBtn:hover { border-color: #90caf9; color: #90caf9; }
+.panelToggleActive {
+  border-color: #90caf9;
+  color: #90caf9;
+  background: rgba(144, 202, 249, 0.08);
+}
+
 .main {
   flex: 1;
   overflow: hidden;

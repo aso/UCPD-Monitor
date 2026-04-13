@@ -29,10 +29,38 @@
 }
 .clearBtn:hover { border-color: #aaa; color: #fff; }
 
-.tableWrapper {
+.tableWrapperOuter {
   flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.tableWrapper {
+  height: 100%;
   overflow-y: auto;
   overflow-x: auto;
+}
+
+.jumpBtn {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 40, 70, 0.82);
+  color: #90caf9;
+  border: 1px solid #3a5080;
+  border-radius: 16px;
+  padding: 4px 18px;
+  font-size: 12px;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: opacity 0.15s, background 0.15s;
+  white-space: nowrap;
+  z-index: 10;
+}
+.jumpBtn:hover {
+  background: rgba(40, 60, 110, 0.95);
+  color: #fff;
 }
 
 .table {

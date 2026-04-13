@@ -1,19 +1,8 @@
 import { useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
-import { parseCpdFile, isUndecodedMessage, buildUnknownRecord } from '../parsers/pd_parser';
 
-const SERVER_PORT = import.meta.env.VITE_SERVER_PORT ?? '3001';
-const LOG_URL = `http://${window.location.hostname}:${SERVER_PORT}/api/log-unknown`;
-
-/** Batch-POST unknown records to the server log (fire-and-forget). */
-function logUnknownBatch(records) {
-  if (!records.length) return;
-  fetch(LOG_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ records }),
-  }).catch(() => { /* non-critical */ });
-}
+// Relative path — works in both Vite dev (proxied) and production (same origin).
+const IMPORT_URL = '/api/import-cpd';
 
 /**
  * Hook for importing .cpd binary log files.
@@ -25,20 +14,14 @@ function logUnknownBatch(records) {
  *   - Progress state is reported through appStore.importStatus
  */
 export function useCpdImport() {
-  const { setMessages, appendLog, setImportStatus, replayFrames } = useAppStore();
+  const { appendLog, setImportStatus } = useAppStore();
 
   /**
-   * Parse a single File and return { frames, errors, filename }.
-   */
-  const parseOne = useCallback(async (file) => {
-    const buffer = await file.arrayBuffer();
-    const { frames, errors } = parseCpdFile(buffer);
-    return { frames, errors, filename: file.name };
-  }, []);
-
-  /**
-   * Import one or more File objects.
-   * Files are parsed in parallel, then all frames are merged and sorted by ts.
+   * Upload one or more .cpd files to the server for processing.
+   * The server feeds the raw bytes through CpdStreamParser, rebuilds the ring
+   * buffer and broadcasts HISTORY — the existing WS handler populates the UI.
+   *
+   * Multiple files are concatenated in order before upload.
    *
    * @param {File[] | FileList} files
    */
@@ -48,73 +31,53 @@ export function useCpdImport() {
       if (fileList.length === 0) return;
 
       const names = fileList.map((f) => f.name).join(', ');
-      appendLog(`[Import] Loading ${fileList.length} file(s): ${names}`);
+      appendLog(`[Import] Uploading ${fileList.length} file(s): ${names}`);
       setImportStatus({ loading: true, filename: names, done: 0, total: fileList.length, warnings: 0 });
 
       try {
-        // Parse all files concurrently
-        const results = await Promise.all(fileList.map(parseOne));
-
-        let allFrames = [];
-        let totalWarnings = 0;
-
-        results.forEach(({ frames, errors, filename }) => {
-          errors.forEach((e) => appendLog(`[Import][${filename}] Warning: ${e}`));
-          totalWarnings += errors.length;
-          allFrames = allFrames.concat(frames);
-          appendLog(`[Import][${filename}] ${frames.length} frames` +
-            (errors.length ? `, ${errors.length} warnings` : ''));
-        });
-
-        // Collect and log undecoded frames from all imported files
-        const unknownRecords = [];
-        results.forEach(({ frames, filename }) => {
-          frames.forEach((frame) => {
-            if (frame.recordType === 'PD_MSG' && isUndecodedMessage(frame.header)) {
-              unknownRecords.push(buildUnknownRecord(frame, `file:${filename}`));
-            }
-          });
-        });
-        if (unknownRecords.length) {
-          logUnknownBatch(unknownRecords);
-          appendLog(`[Import] ${unknownRecords.length} undecoded packet(s) logged to server.`);
+        // Read all files and concatenate their ArrayBuffers
+        const buffers = await Promise.all(fileList.map((f) => f.arrayBuffer()));
+        const totalLen = buffers.reduce((s, b) => s + b.byteLength, 0);
+        const merged = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const b of buffers) {
+          merged.set(new Uint8Array(b), offset);
+          offset += b.byteLength;
         }
 
-        if (allFrames.length === 0) {
-          appendLog('[Import] No valid frames found in any file.');
-          setImportStatus({ loading: false });
-          return;
-        }
+        const res = await fetch(IMPORT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: merged,
+        });
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const { records } = await res.json();
 
-        // Sort all frames by firmware timestamp (ascending)
-        allFrames.sort((a, b) => a.ts - b.ts);
-
-        setMessages(allFrames);
-        replayFrames(allFrames);
-        setImportStatus({ loading: false, done: fileList.length, warnings: totalWarnings });
-        appendLog(
-          `[Import] Done — ${allFrames.length} frames total from ${fileList.length} file(s)` +
-          (totalWarnings ? `, ${totalWarnings} warnings` : '')
-        );
+        setImportStatus({ loading: false, done: fileList.length, warnings: 0 });
+        appendLog(`[Import] Done — ${records} record(s) from ${fileList.length} file(s)`);
       } catch (err) {
         appendLog(`[Import] Error: ${err.message}`);
         setImportStatus({ loading: false });
       }
     },
-    [parseOne, setMessages, appendLog, setImportStatus, replayFrames]
+    [appendLog, setImportStatus]
   );
 
   /**
    * Open a native file-picker dialog (single or multiple .cpd files).
+   * Appends the input to the document body to ensure Electron opens the dialog.
    */
   const openFilePicker = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.cpd,application/octet-stream';
     input.multiple = true;
+    input.style.display = 'none';
     input.onchange = (e) => {
       if (e.target.files?.length) importFiles(e.target.files);
+      document.body.removeChild(input);
     };
+    document.body.appendChild(input);
     input.click();
   }, [importFiles]);
 

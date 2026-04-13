@@ -88,24 +88,34 @@ function applyFrameToTopo(topo, frame) {
       next.source = { ...next.source, connected: true };
 
     } else if ((typeName === 'Request' || typeName === 'EPR_Request') && isSnkDir) {
-      const rdo = dataObjects?.length ? decodeRDO(dataObjects[0]) : null;
-      // Sink sending a request → both sides present
-      next.sink   = { ...next.sink,   connected: true, lastRequest: rdo };
-      next.source = { ...next.source, connected: true };
+      if (dataObjects?.length) {
+        // Determine the correct PDO type from the source capabilities before decoding RDO
+        const rawRdo  = dataObjects[0];
+        const objPos  = (rawRdo >>> 28) & 0xF;
+        const srcPdo  = next.source.capabilities[objPos - 1];
+        const srcType = srcPdo?.pdoType ?? (typeName === 'EPR_Request' ? 'APDO_AVS' : 'Fixed');
+        const rdo = decodeRDO(rawRdo, srcType);
+        // Sink sending a request → both sides present
+        next.sink   = { ...next.sink,   connected: true, lastRequest: rdo };
+        next.source = { ...next.source, connected: true };
+      }
 
     } else if (typeName === 'PS_RDY' && isSrcDir) {
       // Contract established: cross-reference RDO with the source capabilities
       const rdo = next.sink?.lastRequest;
       if (rdo && next.source.capabilities.length) {
         const pdo = next.source.capabilities[rdo.objPos - 1] ?? null;
+        const isAdjustable = rdo.rdoType === 'PPS' || rdo.rdoType === 'AVS';
         next.source = {
           ...next.source,
           contract: {
             pdo,
             objPos:        rdo.objPos,
+            opVoltage_mV:  isAdjustable ? rdo.opVoltage_mV : null,
             opCurrent_mA:  rdo.opCurrent_mA,
-            maxCurrent_mA: rdo.maxCurrent_mA,
+            maxCurrent_mA: isAdjustable ? rdo.opCurrent_mA : rdo.maxCurrent_mA,
             capMismatch:   rdo.capMismatch,
+            rdoType:       rdo.rdoType,
           },
         };
       }

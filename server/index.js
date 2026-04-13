@@ -348,11 +348,78 @@ app.post('/api/ingest', (req, res) => {
   res.json({ ok: true });
 });
 
+// ----- Import a .cpd file from the client (POST /api/import-cpd) -----
+// Body: raw binary (application/octet-stream)
+// Server feeds the bytes through CpdStreamParser, rebuilds ring buffer, then
+// broadcasts HISTORY to all WS clients — same path as browser-reload replay.
+app.post('/api/import-cpd', (req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    const raw = Buffer.concat(chunks);
+    if (!raw.length) return res.status(400).json({ error: 'empty body' });
+
+    // Flush existing data and start a fresh session file
+    recordHistory.length = 0;
+    resetSessionFile();
+
+    // Feed all bytes through a fresh CpdStreamParser (synchronous via EventEmitter)
+    const parser = new CpdStreamParser();
+    parser.on('frame', (buf) => {
+      const eventType = cpdEventType(buf);
+      if (eventType === 'DETACHED') {
+        recordHistory.length = 0;
+      }
+      if (sessionFileStream) sessionFileStream.write(buf);
+      const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+      const ts  = Date.now();
+      recordHistory.push({ hex, ts });
+      if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
+    });
+    parser.write(raw);
+    parser.end();
+
+    console.log(`[Import] Loaded ${recordHistory.length} record(s) from uploaded .cpd`);
+
+    // Push updated history to all connected clients
+    broadcast({ type: 'HISTORY', records: recordHistory });
+
+    res.json({ ok: true, records: recordHistory.length });
+  });
+  req.on('error', (err) => res.status(500).json({ error: err.message }));
+});
+
 // Fallback: serve React app for all other routes
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
 });
 
-server.listen(PORT, () => {
-  console.log(`[Server] Listening on http://localhost:${PORT}`);
-});
+/**
+ * Start the HTTP/WS server.
+ * Returns a Promise that resolves with the bound port, or rejects on error.
+ * When run directly (node server/index.js) starts immediately.
+ * When required by Electron main process, call startServer() explicitly.
+ */
+function startServer(port) {
+  const p = port ?? PORT;
+  return new Promise((resolve, reject) => {
+    server.listen(p, () => {
+      console.log(`[Server] Listening on http://localhost:${p}`);
+      resolve(p);
+    }).on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Server] Port ${p} already in use — assuming server already running`);
+        resolve(p);  // treat as success; Electron will load the existing instance
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+// Auto-start when invoked directly via `node server/index.js`
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { startServer };

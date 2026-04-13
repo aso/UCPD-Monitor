@@ -1,0 +1,27 @@
+{
+  "name": "usb-pd-monitor",
+  "version": "1.0.0",
+  "description": "Local Web App for USB-PD CC Line Monitoring, designed for Electron packaging.",
+  "main": "server/index.js",
+  "scripts": {
+    "start:server": "node server/index.js",
+    "start:client": "npm run dev --prefix client",
+    "dev": "concurrently -n SERVER,CLIENT -c cyan,green \"npm run start:server\" \"npm run start:client\"",
+    "build": "npm run build --prefix client",
+    "start": "npm run build && npm run start:server"
+  },
+  "keywords": [
+    "usb-pd",
+    "web-app",
+    "electron"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.22.1",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

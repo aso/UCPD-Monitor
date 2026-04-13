@@ -1,0 +1,179 @@
+/* ── Wrapper ───────────────────────────────────────────────── */
+.wrapper {
+  background: #111827;
+  border-bottom: 1px solid #2a2a3a;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  background: #1e1e2e;
+  border-bottom: 1px solid #2a2a3a;
+  font-size: 12px;
+  color: #aaa;
+  flex-shrink: 0;
+}
+
+.resetBtn {
+  background: none;
+  border: 1px solid #555;
+  color: #aaa;
+  padding: 1px 6px;
+  cursor: pointer;
+  font-size: 10px;
+  border-radius: 3px;
+}
+.resetBtn:hover { border-color: #aaa; color: #fff; }
+
+/* ── Body: three-column layout ─────────────────────────────── */
+.body {
+  display: flex;
+  flex-direction: row;
+  height: 158px;
+  overflow: hidden;
+}
+
+/* ── Side property panels ───────────────────────────────────── */
+.sidePanel {
+  width: 220px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid #1e2535;
+  background: #0d111a;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+.sidePanel:last-child {
+  border-right: none;
+  border-left: 1px solid #1e2535;
+}
+
+.panelTitle {
+  font-size: 9px;
+  color: #556;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 3px 6px 2px;
+  background: #111520;
+  border-bottom: 1px solid #1e2535;
+  position: sticky;
+  top: 0;
+}
+
+/* ── Property tree rows ─────────────────────────────────────── */
+.propRow {
+  display: flex;
+  align-items: baseline;
+  padding: 1px 4px;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.propRowClickable { cursor: pointer; }
+.propRowClickable:hover { background: #1a2035; }
+
+.propToggle {
+  width: 12px;
+  flex-shrink: 0;
+  color: #557;
+  font-size: 9px;
+  text-align: center;
+  margin-right: 2px;
+}
+.propKey  { color: #889; flex-shrink: 0; }
+.propSep  { color: #445; margin: 0 2px; flex-shrink: 0; }
+.propValue { color: #ccd; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* ── Center ─────────────────────────────────────────────────── */
+.center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.chain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+/* ── Node boxes ─────────────────────────────────────────────── */
+.node {
+  border: 1px solid #333;
+  border-radius: 5px;
+  padding: 5px 10px;
+  min-width: 68px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.nodeInactive { border-color: #1e2535; background: #0d111a; opacity: 0.5; }
+.nodeActive   { border-color: #388e3c; background: rgba(56,142,60,0.12); }
+.nodeContract { border-color: #1565c0; background: rgba(21,101,192,0.15); box-shadow: 0 0 8px rgba(33,150,243,0.2); }
+.nodeEPR      { border-color: #e65100; background: rgba(230,81,0,0.15);   box-shadow: 0 0 8px rgba(255,152,0,0.2); }
+
+.nodeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.nodeLabel { font-size: 10px; font-weight: 700; color: #ccc; letter-spacing: 0.5px; }
+.nodeSub   { font-size: 9px; color: #778; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
+
+.statusDot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dotGray   { background: #333; }
+.dotGreen  { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
+.dotBlue   { background: #2196f3; box-shadow: 0 0 4px #2196f3; }
+.dotOrange { background: #ff9800; box-shadow: 0 0 4px #ff9800; }
+
+/* ── Cable lines ────────────────────────────────────────────── */
+.cable {
+  flex: 1;
+  height: 3px;
+  min-width: 12px;
+  max-width: 50px;
+  transition: background 0.4s;
+}
+.cableInactive { background: #1e2535; }
+.cableActive   { background: linear-gradient(to right, #2e7d32, #66bb6a, #2e7d32); }
+.cableContract { background: linear-gradient(to right, #1565c0, #42a5f5, #1565c0); }
+.cableEPR      { background: linear-gradient(to right, #bf360c, #ffa726, #bf360c); }
+
+/* ── eMarker box ────────────────────────────────────────────── */
+.eMarker {
+  border: 1px solid #1e2535;
+  border-radius: 4px;
+  padding: 4px 8px;
+  text-align: center;
+  flex-shrink: 0;
+  background: #0d111a;
+  opacity: 0.55;
+  transition: opacity 0.3s, border-color 0.3s;
+}
+.eMarkerActive { opacity: 1; border-color: #388e3c; background: rgba(56,142,60,0.1); }
+
+.eMarkerTitle { font-size: 8px; color: #556; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.eMarkerSops  { font-size: 9px; font-family: monospace; display: flex; gap: 4px; align-items: center; justify-content: center; }
+.eMarkerSep   { color: #334; }
+
+/* ── VBUS status bar ────────────────────────────────────────── */
+.vbusBar {
+  font-size: 10px;
+  color: #5a7a9a;
+  font-family: 'Consolas', 'Menlo', monospace;
+  letter-spacing: 0.5px;
+}
+

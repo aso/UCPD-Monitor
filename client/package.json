@@ -1,0 +1,29 @@
+{
+  "name": "client",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node -e \"const n=require('net');const s=n.createServer();s.once('error',()=>{const {execSync}=require('child_process');try{const r=execSync('netstat -ano').toString();const m=r.match(/TCP\\s+[^:]+:5173\\s+\\S+\\s+LISTENING\\s+(\\d+)/);if(m){execSync('taskkill /F /PID '+m[1]);console.log('Killed PID '+m[1]+' on port 5173');}}catch(e){}});s.once('listening',()=>s.close());s.listen(5173);\"",
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "vite": "^8.0.4"
+  }
+}

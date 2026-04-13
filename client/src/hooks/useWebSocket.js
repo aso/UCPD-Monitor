@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
-import { parseRawFrame, isUndecodedMessage, buildUnknownRecord } from '../parsers/pd_parser';
+import { parseRawFrame, parseCpdFile, isUndecodedMessage, buildUnknownRecord } from '../parsers/pd_parser';
 
 const SERVER_PORT = import.meta.env.VITE_SERVER_PORT ?? '3001';
 const WS_URL  = `ws://${window.location.hostname}:${SERVER_PORT}`;
@@ -24,7 +24,7 @@ function logUnknownRecords(records) {
 export function useWebSocket() {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
-  const { setWsStatus, addMessage, appendLog, applyFrame } = useAppStore();
+  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame } = useAppStore();
 
   const handleMessage = useCallback(
     (evt) => {
@@ -59,11 +59,50 @@ export function useWebSocket() {
           break;
         }
 
+        case 'CPD_RECORD': {
+          // payload.hex: space-separated uppercase hex string of one raw CPD record
+          if (hexDump) appendLog(`[HEX] ${payload.hex}`);
+          try {
+            const bytes = Uint8Array.from(
+              payload.hex.split(' ').map((b) => parseInt(b, 16))
+            );
+            const { frames } = parseCpdFile(bytes.buffer);
+            const unknowns = [];
+            for (const frame of frames) {
+              addMessage(frame);
+              applyFrame(frame);
+              if (isUndecodedMessage(frame.header)) {
+                unknowns.push(buildUnknownRecord(frame, 'serial'));
+              }
+            }
+            if (unknowns.length) logUnknownRecords(unknowns);
+          } catch (e) {
+            appendLog(`[Serial] CPD_RECORD parse error: ${e.message}`);
+          }
+          break;
+        }
+
+        case 'SERIAL_STATUS':
+          setSerialStatus({
+            connected: !!payload.connected,
+            port:      payload.port ?? null,
+            baudRate:  payload.baudRate ?? null,
+            error:     payload.error ?? null,
+          });
+          if (payload.error) appendLog(`[Serial] Error: ${payload.error}`);
+          else if (payload.connected) appendLog(`[Serial] Connected: ${payload.port} @ ${payload.baudRate}`);
+          else appendLog('[Serial] Disconnected');
+          break;
+
+        case 'PORT_LIST':
+          setSerialPorts(Array.isArray(payload.ports) ? payload.ports : []);
+          break;
+
         default:
           appendLog(`[WS] Unknown type: ${payload.type}`);
       }
     },
-    [addMessage, appendLog, applyFrame]
+    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump]
   );
 
   const connect = useCallback(() => {
@@ -78,6 +117,8 @@ export function useWebSocket() {
     ws.onopen = () => {
       setWsStatus('connected');
       appendLog('[WS] Connection established');
+      // Request current port list immediately on (re)connect
+      ws.send(JSON.stringify({ type: 'GET_PORT_LIST' }));
     };
 
     ws.onmessage = handleMessage;
@@ -108,5 +149,11 @@ export function useWebSocket() {
     }
   }, []);
 
-  return { sendPing };
+  const sendMessage = useCallback((msg) => {
+    if (wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify(msg));
+    }
+  }, []);
+
+  return { sendPing, sendMessage };
 }

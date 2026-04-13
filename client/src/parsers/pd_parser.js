@@ -578,11 +578,11 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       return [decodeRDO(dataObjects[0], srcPdoType ?? 'Fixed')];
 
     case 'EPR_Request':
-      // First DO is EPR RDO (AVS type), second is EPR PDO reference
+      // DO[0]: EPR RDO (AVS type); DO[1]: mirror of the selected source EPR PDO (spec Table 6.38)
       return [
         decodeRDO(dataObjects[0], srcPdoType ?? 'APDO_AVS'),
         dataObjects[1] !== undefined
-          ? { label: `EPR PDO ref: 0x${dataObjects[1].toString(16).toUpperCase().padStart(8,'0')}`, raw: `0x${dataObjects[1].toString(16).toUpperCase().padStart(8,'0')}` }
+          ? { ...decodePDO(dataObjects[1], 1), eprMirror: true }
           : null,
       ].filter(Boolean);
 

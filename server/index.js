@@ -5,6 +5,8 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const path = require('path');
 const fs = require('fs');
+const { SerialPort } = require('serialport');
+const { CpdStreamParser } = require('./cpdStreamParser');
 
 const PORT = process.env.PORT || 3001;
 
@@ -55,7 +57,104 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Static files (production build of React client)
+// ----- Serial port state -----
+let activePort   = null;   // SerialPort instance
+let activeParser = null;   // CpdStreamParser instance
+let serialStatus = { connected: false, port: null, baudRate: null };
+
+// ----- Port list hotplug polling -----
+let _lastPortsKey = '';   // JSON fingerprint of last port list
+let _cachedPorts  = [];   // last known port list
+
+async function pollPorts() {
+  let list;
+  try {
+    list = await SerialPort.list();
+  } catch {
+    list = [];
+  }
+  // Fingerprint: sorted paths joined
+  const key = list.map((p) => p.path).sort().join(',');
+  if (key !== _lastPortsKey) {
+    _lastPortsKey = key;
+    _cachedPorts  = list;
+    console.log(`[Ports] List changed: [${key || 'none'}]`);
+    broadcast({ type: 'PORT_LIST', ports: list });
+    // If the active port was removed, disconnect
+    if (serialStatus.connected && !list.some((p) => p.path === serialStatus.port)) {
+      console.warn(`[Serial] Active port ${serialStatus.port} disappeared — disconnecting`);
+      disconnectSerial('port removed');
+    }
+  }
+}
+
+const PORT_POLL_INTERVAL_MS = 2000;
+setInterval(pollPorts, PORT_POLL_INTERVAL_MS);
+pollPorts(); // immediate first scan
+
+// ----- Serial port helpers -----
+function broadcastSerialStatus() {
+  broadcast({ type: 'SERIAL_STATUS', ...serialStatus });
+}
+
+function disconnectSerial(reason) {
+  if (activePort) {
+    try { activePort.close(); } catch (_) { /* ignore */ }
+    activePort   = null;
+    activeParser = null;
+  }
+  serialStatus = { connected: false, port: null, baudRate: null };
+  console.log(`[Serial] Disconnected${reason ? ` (${reason})` : ''}`);
+  broadcastSerialStatus();
+}
+
+function connectSerial(portPath, baudRate) {
+  if (activePort) disconnectSerial('superseded');
+
+  const sp = new SerialPort({ path: portPath, baudRate, autoOpen: false });
+  const parser = new CpdStreamParser();
+
+  sp.open((err) => {
+    if (err) {
+      console.error(`[Serial] Failed to open ${portPath}: ${err.message}`);
+      broadcast({ type: 'SERIAL_STATUS', connected: false, port: portPath, baudRate, error: err.message });
+      return;
+    }
+
+    activePort   = sp;
+    activeParser = parser;
+    serialStatus = { connected: true, port: portPath, baudRate };
+    console.log(`[Serial] Opened ${portPath} @ ${baudRate} baud`);
+
+    // Assert DTR — required for STM32CubeMonitor-UCPD firmware to start the CPD stream.
+    // Without DTR the firmware sends a different response (not CPD sync FD FD FD FD).
+    sp.set({ dtr: true }, (dtrErr) => {
+      if (dtrErr) console.warn(`[Serial] DTR assert failed: ${dtrErr.message}`);
+      else        console.log('[Serial] DTR asserted → firmware should start CPD stream');
+    });
+
+    broadcastSerialStatus();
+
+    sp.pipe(parser);
+
+    // Each complete CPD record → hex string → broadcast to all WS clients
+    parser.on('frame', (buf) => {
+      const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+      broadcast({ type: 'CPD_RECORD', hex, ts: Date.now() });
+    });
+
+    sp.on('error', (e) => {
+      console.error(`[Serial] Error on ${portPath}: ${e.message}`);
+      disconnectSerial('error');
+    });
+
+    sp.on('close', () => {
+      if (serialStatus.connected) disconnectSerial('closed');
+    });
+  });
+}
+
+// ----- Static files (production build of React client) -----
 app.use(express.static(path.join(__dirname, '../client/dist')));
 app.use(express.json());
 
@@ -88,7 +187,28 @@ wss.on('connection', (ws, req) => {
         ws.send(JSON.stringify({ type: 'PONG', ts: Date.now() }));
         break;
 
-      // Future: handle CONNECT_SERIAL, DISCONNECT_SERIAL, etc.
+      case 'GET_SERIAL_STATUS':
+        ws.send(JSON.stringify({ type: 'SERIAL_STATUS', ...serialStatus }));
+        break;
+
+      case 'GET_PORT_LIST':
+        ws.send(JSON.stringify({ type: 'PORT_LIST', ports: _cachedPorts }));
+        break;
+
+      case 'SERIAL_CONNECT': {
+        const { port: portPath, baudRate = 115200 } = parsed;  // baud rate is a dummy for USB-CDC
+        if (!portPath) {
+          ws.send(JSON.stringify({ type: 'SERIAL_STATUS', connected: false, error: 'port is required' }));
+          break;
+        }
+        connectSerial(portPath, baudRate);
+        break;
+      }
+
+      case 'SERIAL_DISCONNECT':
+        disconnectSerial('user request');
+        break;
+
       default:
         console.warn(`[WS] Unknown message type: ${parsed.type}`);
     }
@@ -97,13 +217,25 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => console.log('[WS] Client disconnected'));
   ws.on('error', (err) => console.error('[WS] Error:', err.message));
 
-  // Send initial handshake
+  // Send initial handshake + current state
   ws.send(JSON.stringify({ type: 'WELCOME', ts: Date.now(), version: '1.0.0' }));
+  ws.send(JSON.stringify({ type: 'SERIAL_STATUS', ...serialStatus }));
+  ws.send(JSON.stringify({ type: 'PORT_LIST', ports: _cachedPorts }));
 });
 
 // ----- REST API -----
 app.get('/api/status', (_req, res) => {
   res.json({ status: 'ok', clients: wss.clients.size });
+});
+
+// List available serial ports
+app.get('/api/serial/ports', async (_req, res) => {
+  try {
+    const ports = await SerialPort.list();
+    res.json(ports);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ----- Log undecoded / unknown packets (POST /api/log-unknown) -----

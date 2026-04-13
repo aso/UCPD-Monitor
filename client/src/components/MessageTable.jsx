@@ -184,7 +184,9 @@ function PdoRow({ child }) {
                 {child.pdoType === 'APDO_PPS' ? 'PPS' : child.pdoType === 'APDO_AVS' ? 'AVS' : child.pdoType}
               </span>
             )}
-            {child.index != null && <span className={styles.pdoIndex}>#{child.index}</span>}
+            {child.eprMirror
+              ? <span className={styles.pdoIndex} title="Mirror of the selected EPR source PDO (DO2)">EPR PDO mirror</span>
+              : child.index != null && <span className={styles.pdoIndex}>#{child.index}</span>}
           </>
         )}
       </td>

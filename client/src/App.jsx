@@ -5,6 +5,7 @@ import { useAppStore }  from './store/appStore';
 import TopologyView     from './components/TopologyView';
 import MessageTable     from './components/MessageTable';
 import Console          from './components/Console';
+import SerialBar        from './components/SerialBar';
 import styles           from './App.module.css';
 
 function StatusBadge() {
@@ -39,7 +40,7 @@ function ImportBadge() {
 }
 
 export default function App() {
-  const { sendPing }              = useWebSocket();
+  const { sendPing, sendMessage }         = useWebSocket();
   const { openFilePicker, importFiles } = useCpdImport();
   const [dragging, setDragging]   = useState(false);
 
@@ -88,6 +89,9 @@ export default function App() {
         <button onClick={openFilePicker} className={styles.importBtn}>.cpd Import</button>
         <button onClick={sendPing} className={styles.pingBtn}>Ping</button>
       </header>
+
+      {/* Serial port toolbar */}
+      <SerialBar sendMessage={sendMessage} />
 
       {/* Topology strip */}
       <TopologyView />

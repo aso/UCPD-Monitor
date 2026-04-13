@@ -123,6 +123,18 @@ export const useAppStore = create((set, get) => ({
   wsStatus: 'disconnected',
   setWsStatus: (s) => set({ wsStatus: s }),
 
+  // --- Serial port status (mirrored from server) ---
+  serialStatus: { connected: false, port: null, baudRate: null, error: null },
+  setSerialStatus: (s) => set({ serialStatus: s }),
+
+  // --- Available serial ports (hotplug list from server) ---
+  serialPorts: [],
+  setSerialPorts: (ports) => set({ serialPorts: ports }),
+
+  // --- Hex dump mode: log every raw CPD_RECORD hex to console ---
+  hexDump: false,
+  setHexDump: (v) => set({ hexDump: v }),
+
   // --- Messages (time-series decoded frames) ---
   messages: [],
   addMessage: (msg) =>

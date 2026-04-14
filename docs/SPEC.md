@@ -1,7 +1,7 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 1.1  
-更新日: 2026-04-13
+バージョン: 1.3  
+更新日: 2026-04-14
 
 ---
 
@@ -14,11 +14,12 @@
 | 機能 | 説明 |
 |---|---|
 | ライブシリアル監視 | STM32 UCPD デバイスを USB シリアル経由で接続してリアルタイムモニタリング |
-| .cpd ファイルインポート | STM32CubeMonitor-UCPD が保存した `.cpd` バイナリファイルの再生 |
-| USB PD メッセージ解析 | USB PD Rev 3.2 準拠のフルデコード (SPR/EPR/PPS/AVS) |
-| Connection View | Source / Cable (eMarker) / Sink の接続状態と契約情報を可視化 |
-| メッセージテーブル | 時系列メッセージリスト。仮想スクロール対応 (1000行超でも高速)。行選択・クリップボードコピー対応 |
-| セッション保存 | ライブデータを自動的にタイムスタンプ付き `.cpd` ファイルへ保存 |
+| .cpd ファイルインポート | STM32CubeMonitor-UCPD が保存した `.cpd` バイナリファイルの再生。インポート前に Live ログを自動フラッシュ。セッションファイルへの重複書き込みなし |
+| USB PD メッセージ解析 | USB PD Rev 3.2 準拠のフルデコード (SPR/EPR/PPS/AVS/SPR-AVS) |
+| Connection View | Source / Cable (eMarker) / Sink の接続状態と契約情報を可視化。Source PDO は I.max/P.max、Sink PDO は I.op/P.op を表示 |
+| メッセージテーブル | 時系列メッセージリスト。仮想スクロール対応 (1000行超でも高速)。列幅ユーザリサイズ可。ツリー展開・ウィンドウリサイズで最終列が安定して右端まで表示 |
+| 行選択・クリップボードコピー | クリック/Shift+クリック範囲選択。Ctrl+C または右クリックで TSV コピー |
+| セッション保存 | ライブデータを自動的にタイムスタンプ付き `.cpd` ファイルへ保存。アプリ終了時にシリアルポート自動切断・ファイルフラッシュ |
 | 不明パケットログ | パース不能フレームを `logs/unknown_packets.yaml` へ記録 |
 
 ---
@@ -127,11 +128,12 @@ STM32 UCPD
   → useCpdImport.js
   → POST /api/import-cpd (Content-Type: application/octet-stream)
       ← サーバ側:
-          resetSessionFile()
           CpdStreamParser でバイト列をフル解析
           importedRecords = records[]  (リングバッファ不使用)
-          broadcast({ type: 'HISTORY', records: importedRecords })
+          broadcast({ type: 'HISTORY', records: importedRecords, filename: ... })
+          ※ セッションファイルへの書き込みは行わない (重複防止)
   → クライアント HISTORY ハンドラ
+      → filename が付いている場合、現在の Live ログをフラッシュ (clearMessages)
       → メッセージリスト全置換
       → トポロジ再構築 (全フレームを applyFrameToTopo で逐次適用)
 ```
@@ -189,6 +191,9 @@ PDO デコードは `isSink` フラグを保持し、Source/Sink どちらの能
 | APDO_AVS | vMinMv, vMaxMv, pdpW, peakCurrent | Sink は peakCurrent フィールド省略 |
 | APDO_SPR_AVS | vMinMv, vMaxMv, iMa_9_15, iMa_15_20 | Source 専用 (isSink=false) |
 
+> **Connection View での表示ラベル**:  
+> Source PDO グリッドでは電流・電力フィールドを **I.max / P.max** と表示し、Sink PDO グリッドでは USB PD Rev 3.2 Table 6-12 に準拠して **I.op / P.op** と表示する。ラベル切り替えは `isSink` prop を受け取った `CapList` コンポーネント内の `GRID_COLS_SRC` / `GRID_COLS_SNK` 定数で行う。
+
 ### RDO 解析
 
 RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正しいビットレイアウトを選択する。
@@ -219,7 +224,7 @@ RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正
 | type | ペイロード | 説明 |
 |---|---|---|
 | `CPD_RECORD` | `{hex, ts}` | ライブフレーム (1 件) |
-| `HISTORY` | `{records: [{hex,ts}], filename?: string}` | 全履歴リプレイ。インポート時は元ファイル名を含む |
+| `HISTORY` | `{records: [{hex,ts}], filename?: string}` | 全履歴リプレイ。インポート時は元ファイル名を含む。filename が付いている場合クライアントは Live ログをフラッシュしてから表示 |
 | `SERIAL_STATUS` | `{connected, port, baudRate}` | 接続状態変化 |
 | `PORT_LIST` | `{ports: [...]}` | ポート一覧変化 (ホットプラグ) |
 
@@ -258,12 +263,15 @@ USB-PD 接続状態を Connection View として可視化。
     - Battery PDO: 電圧範囲 + opPower_mW
 - **eMarker ノード**: SOP'/SOP'' 検出、ケーブル定格電流・電圧、アクティブケーブル/EPR 対応
 - **Sink ノード / ボックス**
-  - PD リビジョン、Sink Capabilities、最終 Request (RDO 詳細展開)
-  - **ノードボックス副表示**: `{要求電圧} / {要求電力}` を表示
+  - PD リビジョン、Sink Capabilities (I.op/P.op ラベルで表示)、最終 Request (RDO 詳細展開)
+  - **ノードボックス副表示**: `{V.req (要求電圧)} / {要求電力}` を表示
     - Fixed: srcPdo.vMv × opCurrent_mA → W 換算
     - PPS/AVS: opVoltage_mV × opCurrent_mA → W 換算
     - Battery: opPower_mW をそのまま W 表示
 - **VBUS / CC ピン**: ASCII_LOG から抽出
+  - **Source PDO グリッド列**: V.max / V.min / **I.max** / **P.max**
+  - **Sink PDO グリッド列**: V.max / V.min / **I.op** / **P.op** (USB PD Rev 3.2 Table 6 に準拠したラベル)
+  - ケーブル線表示位置はノードボックス上部寄りに固定 (SINKが最小高さでも接触しない)
 
 ### 7.3 MessageTable.jsx
 
@@ -277,6 +285,8 @@ USB-PD 接続状態を Connection View として可視化。
 **機能:**
 
 - **仮想スクロール** (`@tanstack/react-virtual`): 画面内の行のみ DOM 描画 (overscan 20行)。1000行超でもスムーズ
+- **列幅リサイズ**: 各列ヘッダ右端のドラッグハンドルで幅を変更可能。最小幅以下には縮不可。最終列 (Parsed) は常に残り幅いっぱいに自動拡張
+- **テーブル幅安定性**: `width: 100%` + `table-layout: fixed` + `minWidth` の組み合わせにより、ツリー展開・ウィンドウリサイズ時もヘッダ幅が崩れない。子行 colSpan 合計が列数 (9) と一致することで暗黙列生成を防止
 - **O(n) RDO 解決**: `reqToSrcPdo` Map による前向きスキャン。全メッセージを 1 パスで処理し、Request 行に参照元 PDO を関連付け
 - **`memo(MessageRow)`**: 無関係な行追加時の再レンダリングを抑制
 - 行クリックで展開: PDO/RDO 子行を表示
@@ -352,6 +362,10 @@ Zustand により以下の状態を管理:
 ## 9. セッションファイル管理
 
 起動時・接続時・切断時・DETACHED イベント受信時に、`logs/session_YYYY-MM-DDTHH-MM-SS.cpd` を新規作成してローテーションする。ライブで受信したフレームはバイナリのまま書き込まれ、同一フォーマットで再インポート可能。
+
+**インポート時の扱い**: `.cpd` ファイルのインポートで表示されるデータはセッションファイルへ書き込まない (元ファイルとの重複を防止)。
+
+**アプリ終了時**: `app.on('before-quit')` フックで `shutdown()` を呼び出し、アクティブなシリアルポートを閉じた後にセッションファイルストリームをフラッシュ・クローズする。
 
 ---
 

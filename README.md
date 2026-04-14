@@ -16,18 +16,20 @@ However, STM32CubeMonitor-UCPD v1.4 only supports **PD 2.0 / PD 3.0**, and canno
 
 This project was created to fill that gap. It accepts the same `.cpd` binary stream that STM32CubeMonitor-UCPD produces and decodes it using a fully **USB PD Rev 3.2 compliant** parser built from scratch.
 
+![Main screen](docs/main-screen.png)
+
 ---
 
 ## Features
 
 - **Live Serial Monitoring** — Connect to any STM32 UCPD device via USB-UART and receive PD frames in real time
-- **`.cpd` File Import** — Drag-and-drop or open `.cpd` binary files captured by STM32CubeMonitor-UCPD; server-side parsing eliminates ring-buffer mismatches
-- **USB PD Rev 3.2 Decoder** — Full decode of Control, Data, and Extended messages including EPR, PPS, and AVS
-- **Connection View** — Visual display of Source / Cable (eMarker) / Sink connection state, PDO capabilities, and active power contract. SOURCE node shows confirmed output voltage and current/power after PS_RDY; SINK node shows requested voltage and calculated power.
-- **Message Table** — High-performance virtual scroll ([@tanstack/react-virtual](https://tanstack.com/virtual)) handles 1 000 + rows smoothly. Expandable PDO/RDO child rows with O(n) RDO-to-source-PDO resolution.
+- **`.cpd` File Import** — Drag-and-drop or open `.cpd` binary files captured by STM32CubeMonitor-UCPD; server-side parsing eliminates ring-buffer mismatches. The current Live log is automatically cleared before import and import data is never duplicated into the session file.
+- **USB PD Rev 3.2 Decoder** — Full decode of Control, Data, and Extended messages including EPR, PPS, AVS, and SPR-AVS
+- **Connection View** — Visual topology of Source / Cable (eMarker) / Sink. SOURCE node shows confirmed output voltage and current/power after PS_RDY. SINK node shows **V.req** (requested voltage) and calculated power. PDO grids display `I.max` / `P.max` for Source PDOs and `I.op` / `P.op` for Sink PDOs, matching USB PD Rev 3.2 semantics.
+- **Message Table** — High-performance virtual scroll ([@tanstack/react-virtual](https://tanstack.com/virtual)) handles 1 000 + rows smoothly. Expandable PDO/RDO child rows with O(n) RDO-to-source-PDO resolution. Column widths are user-resizable; the rightmost "Parsed" column auto-fills the remaining window width and is stable across tree-expand and window resize.
 - **Row Selection & Clipboard Copy** — Click / Shift-click range selection; Ctrl+C or right-click to copy rows as TSV (with `DATA:HEX` raw suffix)
 - **Auto-scroll with Jump-to-Latest** — Automatic scroll to newest message; floats a button to return after manual browsing
-- **Session File Save** — Live frames are automatically written to a timestamped `.cpd` file for later replay
+- **Session File Save** — Live frames are automatically written to a timestamped `.cpd` file for later replay. The serial port is cleanly disconnected and the session file flushed on application quit.
 - **Unknown Packet Log** — Unrecognised frames are appended to `logs/unknown_packets.yaml` for diagnostics
 - **Panel Toggles** — Show/hide Connection View and Console panels independently
 
@@ -55,7 +57,6 @@ Download the latest installer from the [Releases](https://github.com/aso/UCPD-Mo
 | Platform | File |
 |---|---|
 | Windows | NSIS installer (`.exe`) |
-| macOS | DMG image |
 | Linux | AppImage |
 
 After installation, launch **UCPD-Monitor**.
@@ -159,13 +160,16 @@ Source_Capabilities, Sink_Capabilities, Request, EPR_Request, BIST, Alert, Batte
 Source_Capabilities_Extended (SCEDB), Status, PPS_Status, Battery_Capabilities, Manufacturer_Info, Sink_Capabilities_Extended, Country_Info, Country_Codes, Security_*, Firmware_Update_*, Extended_Control.
 
 ### PDO / RDO Types
-Fixed, Variable, Battery, APDO (PPS), APDO (AVS/SPR), APDO (SPR-AVS) — all with full field decode. Battery RDO carries power fields in 250 mW units (opPower_mW / limPower_mW).
+Fixed, Variable, Battery, APDO (PPS), APDO (AVS), APDO (SPR-AVS) — all with full field decode.
+- Source PDOs display **I.max** / **P.max**; Sink PDOs display **I.op** / **P.op** per USB PD Rev 3.2 terminology.
+- Battery RDO carries power fields in 250 mW units (`opPower_mW` / `limPower_mW`).
+- GiveBack flag dynamically switches Max/Min labels in RDO child rows.
 
 ---
 
 ## License
 
-ISC
+MIT
 
 ---
 

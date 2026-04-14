@@ -1,41 +1,57 @@
+/* ═══════════════════════════════════════════════════════════════
+   TopologyView — Instrument-panel aesthetic
+   Design language: dark aluminium chassis, LCD-green readouts
+   ═══════════════════════════════════════════════════════════════ */
+
 /* ── Wrapper ───────────────────────────────────────────────── */
 .wrapper {
-  background: #111827;
-  border-bottom: 1px solid #2a2a3a;
+  background: #0b0e14;
+  border-bottom: 2px solid #0d1a0d;
   display: flex;
   flex-direction: column;
   user-select: none;
+  flex-shrink: 0;
 }
 
+/* ── Header bar ─────────────────────────────────────────────── */
 .header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 4px 10px;
-  background: #1e1e2e;
-  border-bottom: 1px solid #2a2a3a;
-  font-size: 12px;
-  color: #aaa;
+  padding: 3px 10px;
+  background: linear-gradient(to bottom, #111820, #0a0f14);
+  border-bottom: 1px solid #0a140a;
+  font-size: 9px;
+  color: #3a6a3a;
+  letter-spacing: 2px;
+  text-transform: uppercase;
   flex-shrink: 0;
 }
 
 .resetBtn {
-  background: none;
-  border: 1px solid #555;
-  color: #aaa;
-  padding: 1px 6px;
+  background: #070e07;
+  border: 1px solid #1a2a1a;
+  color: #3a6a3a;
+  padding: 1px 8px;
   cursor: pointer;
-  font-size: 10px;
-  border-radius: 3px;
+  font-size: 8px;
+  border-radius: 2px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transition: background 0.15s, color 0.15s;
 }
-.resetBtn:hover { border-color: #aaa; color: #fff; }
+.resetBtn:hover {
+  background: #0e1a0e;
+  color: #6ecf6e;
+  border-color: #3a6a3a;
+}
 
 /* ── Body: three-column layout ─────────────────────────────── */
 .body {
   display: flex;
   flex-direction: row;
-  height: 158px;
-  overflow: hidden;
+  height: auto;
+  overflow: visible;
 }
 
 /* ── Side property panels ───────────────────────────────────── */
@@ -43,28 +59,29 @@
   width: 200px;
   flex-shrink: 0;
   overflow-y: auto;
-  border-right: 1px solid #1e2535;
-  background: #0d111a;
+  border-right: 1px solid #0a140a;
+  background: #070c07;
   font-family: 'Consolas', 'Menlo', monospace;
+  scrollbar-width: thin;
+  scrollbar-color: #1a2a1a transparent;
 }
 .sidePanel:last-child {
   border-right: none;
-  border-left: 1px solid #1e2535;
+  border-left: 1px solid #0a140a;
 }
-/* Cable panel is narrower \u2014 typically only a few rows */
 .sidePanel:nth-child(3) {
   width: 150px;
-  border-left: 1px solid #1e2535;
+  border-left: 1px solid #0a140a;
 }
 
 .panelTitle {
-  font-size: 9px;
-  color: #556;
+  font-size: 8px;
+  color: #2a4a2a;
   text-transform: uppercase;
-  letter-spacing: 1px;
-  padding: 3px 6px 2px;
-  background: #111520;
-  border-bottom: 1px solid #1e2535;
+  letter-spacing: 2px;
+  padding: 3px 8px 2px;
+  background: #050805;
+  border-bottom: 1px solid #0a140a;
   position: sticky;
   top: 0;
 }
@@ -74,110 +91,574 @@
   display: flex;
   align-items: baseline;
   padding: 1px 4px;
-  font-size: 11px;
-  line-height: 1.55;
+  font-size: 10.5px;
+  line-height: 1.6;
   white-space: nowrap;
   overflow: hidden;
 }
 .propRowClickable { cursor: pointer; }
-.propRowClickable:hover { background: #1a2035; }
+.propRowClickable:hover { background: #0a130a; }
 
 .propToggle {
   width: 12px;
   flex-shrink: 0;
-  color: #557;
+  color: #1e3a1e;
   font-size: 9px;
   text-align: center;
   margin-right: 2px;
 }
-.propKey  { color: #889; flex-shrink: 0; }
-.propSep  { color: #445; margin: 0 2px; flex-shrink: 0; }
-.propValue { color: #ccd; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.propKey   { color: #3a5a3a; flex-shrink: 0; }
+.propSep   { color: #1e2e1e; margin: 0 2px; flex-shrink: 0; }
+.propValue { color: #7eba7e; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-/* ── Center ─────────────────────────────────────────────────── */
+/* ── Center area ────────────────────────────────────────────── */
 .center {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  padding: 8px 12px;
-  gap: 8px;
-  overflow: hidden;
+  justify-content: flex-start;
+  padding: 5px 8px;
+  gap: 6px;
+  overflow: visible;
+  background: radial-gradient(ellipse at center, #080f08 0%, #050805 100%);
 }
 
 .chain {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   width: 100%;
 }
 
 /* ── Node boxes ─────────────────────────────────────────────── */
 .node {
-  border: 1px solid #333;
-  border-radius: 5px;
-  padding: 5px 10px;
-  min-width: 68px;
+  border: 1px solid #0e1a0e;
+  border-radius: 3px;
+  padding: 5px 7px;
+  min-width: 320px;
   text-align: center;
   flex-shrink: 0;
   transition: border-color 0.3s, box-shadow 0.3s;
+  background: #070d07;
+  position: relative;
 }
 
-.nodeInactive { border-color: #1e2535; background: #0d111a; opacity: 0.5; }
-.nodeActive   { border-color: #388e3c; background: rgba(56,142,60,0.12); }
-.nodeContract { border-color: #1565c0; background: rgba(21,101,192,0.15); box-shadow: 0 0 8px rgba(33,150,243,0.2); }
-.nodeEPR      { border-color: #e65100; background: rgba(230,81,0,0.15);   box-shadow: 0 0 8px rgba(255,152,0,0.2); }
+/* SINK with RDO only (no SNK_CAP) */
+.nodeNarrow {
+  min-width: 140px;
+}
+
+/* CONTRACT box: compact, no min-width */
+.nodeContract_box {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.nodeInactive {
+  border-color: #0a120a;
+  background: #050805;
+}
+
+.nodeActive {
+  border-color: #1a3a1a;
+  background: #070d07;
+  box-shadow: 0 0 8px rgba(50,160,50,0.07), inset 0 0 10px rgba(0,40,0,0.4);
+}
+
+.nodeContract {
+  border-color: #1a5a1a;
+  background: #060c06;
+  box-shadow: 0 0 12px rgba(30,200,60,0.18), inset 0 0 14px rgba(0,60,10,0.3);
+}
+
+.nodeEPR {
+  border-color: #7a4a00;
+  background: #0e0800;
+  box-shadow: 0 0 12px rgba(255,160,0,0.22), inset 0 0 12px rgba(60,20,0,0.35);
+}
 
 .nodeHeader {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 5px;
+  margin-bottom: 3px;
 }
-.nodeLabel { font-size: 10px; font-weight: 700; color: #ccc; letter-spacing: 0.5px; }
-.nodeSub   { font-size: 9px; color: #778; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
 
-.statusDot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.dotGray   { background: #333; }
-.dotGreen  { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
-.dotBlue   { background: #2196f3; box-shadow: 0 0 4px #2196f3; }
-.dotOrange { background: #ff9800; box-shadow: 0 0 4px #ff9800; }
-
-/* ── Cable lines ────────────────────────────────────────────── */
-.cable {
-  flex: 1;
-  height: 3px;
-  min-width: 12px;
-  max-width: 50px;
-  transition: background 0.4s;
+.nodeLabel {
+  font-size: 13px;
+  font-weight: 900;
+  color: #3a7a3a;
+  letter-spacing: 5px;
+  text-transform: uppercase;
+  font-family: 'Consolas', 'Menlo', monospace;
 }
-.cableInactive { background: #1e2535; }
-.cableActive   { background: linear-gradient(to right, #2e7d32, #66bb6a, #2e7d32); }
-.cableContract { background: linear-gradient(to right, #1565c0, #42a5f5, #1565c0); }
-.cableEPR      { background: linear-gradient(to right, #bf360c, #ffa726, #bf360c); }
 
-/* ── eMarker box ────────────────────────────────────────────── */
-.eMarker {
-  border: 1px solid #3a4060;
-  border-radius: 4px;
-  padding: 4px 8px;
-  text-align: center;
-  flex-shrink: 0;
-  background: #141824;
-  transition: border-color 0.3s, background 0.3s;
-}
-.eMarkerActive { border-color: #388e3c; background: rgba(56,142,60,0.1); }
-
-.eMarkerTitle { font-size: 8px; color: #778; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-.eMarkerSops  { font-size: 9px; font-family: monospace; display: flex; gap: 4px; align-items: center; justify-content: center; }
-.eMarkerSep   { color: #556; }
-
-/* ── VBUS status bar ────────────────────────────────────────── */
-.vbusBar {
-  font-size: 10px;
-  color: #5a7a9a;
+.nodeSub {
+  font-size: 9px;
+  color: #3a6a3a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
   font-family: 'Consolas', 'Menlo', monospace;
   letter-spacing: 0.5px;
 }
+
+/* ── Meter display — LCD readout style ─────────────────────── */
+.meterPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #020502;
+  border: 1px solid #0a140a;
+  border-radius: 2px;
+  padding: 5px 14px;
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.6);
+}
+
+.meterRow {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.meterLabel {
+  font-size: 9px;
+  color: #4a9a4a;
+  font-family: 'Consolas', 'Menlo', monospace;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.meterValue {
+  font-size: 34px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-weight: 400;
+  text-align: right;
+  letter-spacing: 2px;
+  line-height: 1;
+  text-shadow: 0 0 8px currentColor, 0 0 16px currentColor;
+}
+
+.meterUnit {
+  font-size: 12px;
+  color: #4a9a4a;
+  font-family: 'Consolas', 'Menlo', monospace;
+  align-self: flex-end;
+  padding-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+
+/* ── PDO type indicator lamps ─────────────────────────────────── */
+.pdoLamps {
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  margin: 0 0 5px;
+  flex-wrap: wrap;
+}
+
+.pdoLamp {
+  font-size: 6px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  letter-spacing: 1px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+  border: 1px solid #0d1d0d;
+  color: #1a3a1a;
+  transition: color 0.3s, border-color 0.3s, text-shadow 0.3s;
+}
+
+.pdoLampActive {
+  /* color/border/textShadow applied inline */
+}
+
+/* ── EPR lamp — top-left corner of node box ──────────────────── */
+.eprLamp {
+  position: absolute;
+  left: 5px;
+  top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 7px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 2px;
+  border: 1px solid transparent;
+  z-index: 1;
+}
+
+.eprLampDot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.eprLampDim {
+  color: #1a2a1a;
+  border-color: #0d1a0d;
+}
+.eprLampDim .eprLampDot {
+  background: #0d1a0d;
+}
+
+.eprLampLit {
+  color: #ffaa00;
+  border-color: #6a4a00;
+  text-shadow: 0 0 6px rgba(255,170,0,0.7);
+}
+.eprLampLit .eprLampDot {
+  background: #ffaa00;
+  box-shadow: 0 0 4px #ffaa00, 0 0 8px rgba(255,170,0,0.5);
+}
+
+/* ── LED status dot ─────────────────────────────────────────── */
+.statusDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dotGray   { background: #1a2a1a; box-shadow: none; }
+.dotGreen  { background: #33dd33; box-shadow: 0 0 4px #33dd33, 0 0 10px rgba(51,221,51,0.5); }
+.dotBlue   { background: #00e0ff; box-shadow: 0 0 4px #00e0ff, 0 0 10px rgba(0,224,255,0.4); }
+.dotOrange { background: #ffaa00; box-shadow: 0 0 4px #ffaa00, 0 0 10px rgba(255,170,0,0.5); }
+
+/* ── Cable + eMarker unified track ───────────────────────────── */
+.cableChain {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 80px;
+  min-height: 40px;
+}
+
+.cableTrack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 28px;
+  height: 4px;
+  border-radius: 2px;
+  transition: background 0.4s, box-shadow 0.4s;
+}
+
+.cableInactive { background: #0a140a; }
+.cableActive {
+  background: linear-gradient(to right, #1a4a1a, #33dd33, #1a4a1a);
+  box-shadow: 0 0 5px rgba(51,221,51,0.35);
+}
+.cableContract {
+  background: linear-gradient(to right, #00501a, #00ff60, #00501a);
+  box-shadow: 0 0 6px rgba(0,255,96,0.4);
+}
+.cableEPR {
+  background: linear-gradient(to right, #503000, #ffaa00, #503000);
+  box-shadow: 0 0 6px rgba(255,170,0,0.4);
+}
+
+/* ── eMarker box ─────────────────────────────────────────────── */
+.eMarker {
+  position: relative;
+  z-index: 1;
+  border: 1px solid #1a3a1a;
+  border-radius: 3px;
+  padding: 5px 10px;
+  text-align: center;
+  flex-shrink: 0;
+  background: #060b06;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.eMarkerActive {
+  border-color: #2a7a2a;
+  box-shadow: 0 0 8px rgba(51,221,51,0.25);
+}
+
+.eMarkerTitle {
+  font-size: 7px;
+  color: #4a9a4a;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  margin-bottom: 3px;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+.eMarkerSops {
+  font-size: 9px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.eMarkerSep { color: #2a6a2a; }
+
+/* ── Contract values inside eMarker ─────────────────────────── */
+.contractIn {
+  border-top: 1px solid #0a1a0a;
+  padding-top: 4px;
+  margin-top: 1px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+
+.contractInPdo {
+  font-size: 7px;
+  color: #4a9a4a;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+  display: block;
+  text-align: center;
+}
+
+.contractInRow {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  justify-content: center;
+}
+
+.contractInLabel {
+  font-size: 9px;
+  color: #3a7a3a;
+  letter-spacing: 0.8px;
+  min-width: 72px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.contractInValue {
+  font-size: 40px;
+  letter-spacing: 1px;
+  text-shadow: 0 0 4px currentColor, 0 0 8px currentColor;
+  line-height: 1;
+  min-width: 100px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.contractInUnit {
+  font-size: 14px;
+  color: #4a9a4a;
+  align-self: flex-end;
+  padding-bottom: 5px;
+  letter-spacing: 0.5px;
+  min-width: 20px;
+}
+
+/* ── Compact PDO capability list (inside node box) ─────────── */
+.capList {
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 12px;
+  background: #020502;
+  border: 1px solid #0a140a;
+  border-radius: 2px;
+  padding: 2px 0;
+  box-shadow: inset 0 1px 4px rgba(0,0,0,0.6);
+  max-height: 340px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #1a2a1a transparent;
+}
+
+.capHeader {
+  display: grid;
+  grid-template-columns: 22px 52px repeat(4, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  padding: 1px 5px 2px;
+  position: sticky;
+  top: 0;
+  background: #030a03;
+  border-bottom: 1px solid #0e1e0e;
+  z-index: 1;
+  margin-bottom: 1px;
+}
+
+.capHeaderCell {
+  font-size: 9px;
+  color: #4a8a4a;
+  letter-spacing: 0.4px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.capRow {
+  display: grid;
+  grid-template-columns: 22px 52px repeat(4, 1fr);
+  align-items: center;
+  column-gap: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+
+.capRowSelected {
+  background: #05200a;
+  outline: 1px solid #2db52d;
+  outline-offset: -1px;
+  box-shadow: 0 0 10px rgba(45,181,45,0.35), inset 0 0 8px rgba(0,80,10,0.4);
+}
+
+.capIdx {
+  color: #3a6a3a;
+  text-align: right;
+  font-size: 11px;
+}
+
+.capBadgeChip {
+  font-weight: 700;
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  border: 1px solid;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capCellLit {
+  color: #8ecf8e;
+  font-size: 12px;
+  text-align: right;
+  letter-spacing: 0.2px;
+}
+
+.capCellDim {
+  color: #1e3a1e;
+  font-size: 12px;
+  text-align: right;
+}
+
+/* legacy aliases kept for safety */
+.capBadge  { font-size: 9px; font-weight: 700; }
+.capRange  { color: #7eba7e; }
+
+/* ── RDO row inside sink cap list (legacy, kept for SOURCE) ─── */
+.rdoRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 5px 1px;
+  border-top: 1px solid #0a1a0a;
+  margin-top: 1px;
+}
+.rdoLabel {
+  color: #90caf9;
+  font-size: 8px;
+  letter-spacing: 1px;
+  min-width: 22px;
+  flex-shrink: 0;
+  font-weight: 700;
+}
+.rdoValue {
+  color: #90caf9;
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+/* ── Sink two-column layout ─────────────────────────────────── */
+.sinkColumns {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.sinkCol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* RDO column: compact fixed width */
+.sinkColRdo {
+  flex: 0 0 130px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* SNK CAP column: take remaining space */
+.sinkColSnk {
+  flex: 1;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sinkColLabel {
+  font-size: 8px;
+  color: #4a8a4a;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-family: 'Consolas', 'Menlo', monospace;
+  margin-bottom: 2px;
+  padding-left: 2px;
+  text-align: left;
+}
+
+/* ── RDO detail panel (sink right column) ───────────────────── */
+.rdoPanel {
+  background: #020810;
+  border: 1px solid #0a152a;
+  border-radius: 2px;
+  padding: 3px 6px;
+  font-family: 'Consolas', 'Menlo', monospace;
+}
+
+.rdoPanelTitle {
+  font-size: 14px;
+  color: #90caf9;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  display: block;
+  font-weight: 700;
+  border-bottom: 1px solid #0a152a;
+  padding-bottom: 3px;
+  margin-bottom: 4px;
+}
+
+.rdoPanelRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 1px 0;
+}
+
+.rdoPanelKey {
+  font-size: 10px;
+  color: #4a7a9a;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.rdoPanelVal {
+  font-size: 10px;
+  color: #90caf9;
+  text-align: right;
+}
+
+.rdoPanelFlag {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
 

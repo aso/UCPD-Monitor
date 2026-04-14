@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useRef, useEffect } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './Console.module.css';

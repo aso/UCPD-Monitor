@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { create } from 'zustand';
 import { decodePDO, decodeRDO } from '../parsers/pd_parser';
 
@@ -6,9 +8,9 @@ import { decodePDO, decodeRDO } from '../parsers/pd_parser';
  */
 
 // ── Topology initial shapes ──────────────────────────────────────
-const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], contract: null, status: null };
+const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], snkCaps: [], contract: null, status: null };
 const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
-const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], lastRequest: null, status: null };
+const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], srcCaps: [], lastRequest: null, status: null };
 
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
@@ -17,6 +19,7 @@ export const INITIAL_TOPOLOGY = {
   cable:   { attached: false },
   vbusMv:  null,
   ccPin:   null,
+  prSwapPending: false,
 };
 
 /**
@@ -76,16 +79,51 @@ function applyFrameToTopo(topo, frame) {
   const next = { ...topo };
 
   if (isSOP) {
-    if (typeName === 'Source_Capabilities' && isSrcDir) {
-      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1));
-      // Source advertising caps → both sides are present on the bus
-      next.source = { ...next.source, connected: true, pdRevision: header.specRevision, capabilities: caps };
-      next.sink   = { ...next.sink,   connected: true };
+    if (typeName === 'PR_Swap') {
+      // Power Role Swap request: flag pending — swap source↔sink on next Source_Capabilities
+      next.prSwapPending = true;
+
+    } else if (typeName === 'Source_Capabilities' && isSrcDir) {
+      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i));
+      if (next.prSwapPending) {
+        // PR Swap completed: old sink is now the new source
+        const prevSrc = { ...next.source };
+        const prevSnk = { ...next.sink };
+        next.source = {
+          connected:    true,
+          pdRevision:   header.specRevision,
+          eprActive:    false,
+          capabilities: caps,                      // new SRC_CAPA from new source
+          snkCaps:      prevSnk.capabilities,      // new source inherits old sink's SNK caps
+          contract:     null,
+          status:       null,
+        };
+        next.sink = {
+          connected:    true,
+          pdRevision:   prevSrc.pdRevision,
+          eprActive:    false,
+          capabilities: prevSrc.snkCaps,           // new sink's SNK caps (were source's snkCaps)
+          srcCaps:      prevSrc.capabilities,      // new sink remembers old SRC caps
+          lastRequest:  null,
+          status:       null,
+        };
+        next.prSwapPending = false;
+      } else {
+        // Normal: source advertising caps
+        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, capabilities: caps };
+        next.sink   = { ...next.sink,   connected: true };
+      }
 
     } else if (typeName === 'Sink_Capabilities') {
-      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i + 1, true));
-      next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, capabilities: caps };
-      next.source = { ...next.source, connected: true };
+      const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i, true));
+      if (isSrcDir) {
+        // Source advertising its own sink capabilities (PR_Swap capable device)
+        next.source = { ...next.source, connected: true, snkCaps: caps };
+        next.sink   = { ...next.sink,   connected: true };
+      } else {
+        next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, capabilities: caps };
+        next.source = { ...next.source, connected: true };
+      }
 
     } else if ((typeName === 'Request' || typeName === 'EPR_Request') && isSnkDir) {
       if (dataObjects?.length) {

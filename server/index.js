@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 'use strict';
 
 const express = require('express');
@@ -11,11 +13,17 @@ const { CpdStreamParser } = require('./cpdStreamParser');
 const PORT = process.env.PORT || 3001;
 
 // YAML log file for undecoded / unknown packets
-const LOGS_DIR        = path.join(__dirname, '../logs');
-const UNKNOWN_LOG_PATH = path.join(LOGS_DIR, 'unknown_packets.yaml');
-
-// Ensure logs/ directory exists
-if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+// In a packaged Electron app __dirname is inside an asar (read-only).
+// UCPD_USER_DATA is set by electron/main.js to app.getPath('userData')
+// BEFORE startServer() is called, so we resolve the path lazily here.
+function getLogsDir() {
+  return process.env.UCPD_USER_DATA
+    ? path.join(process.env.UCPD_USER_DATA, 'logs')
+    : path.join(__dirname, '../logs');
+}
+function getUnknownLogPath() {
+  return path.join(getLogsDir(), 'unknown_packets.yaml');
+}
 
 /**
  * Serialise one unknown-packet record to a YAML document block.
@@ -88,7 +96,7 @@ function makeSessionPath() {
     '-', pad(now.getMinutes()),
     '-', pad(now.getSeconds()),
   ].join('');
-  return path.join(LOGS_DIR, `session_${stamp}.cpd`);
+  return path.join(getLogsDir(), `session_${stamp}.cpd`);
 }
 
 /** Detect event type from a raw CPD frame Buffer.
@@ -338,9 +346,10 @@ app.post('/api/log-unknown', (req, res) => {
   const capturedAt = new Date().toISOString();
   try {
     const yaml = records.map((r) => recordToYaml(r, capturedAt)).join('\n');
-    fs.appendFileSync(UNKNOWN_LOG_PATH, yaml, 'utf8');
-    console.log(`[Log] Appended ${records.length} unknown-packet record(s) → ${UNKNOWN_LOG_PATH}`);
-    res.json({ ok: true, appended: records.length, file: UNKNOWN_LOG_PATH });
+    const unknownLogPath = getUnknownLogPath();
+    fs.appendFileSync(unknownLogPath, yaml, 'utf8');
+    console.log(`[Log] Appended ${records.length} unknown-packet record(s) \u2192 ${unknownLogPath}`);
+    res.json({ ok: true, appended: records.length, file: unknownLogPath });
   } catch (err) {
     console.error('[Log] Failed to write unknown_packets.yaml:', err.message);
     res.status(500).json({ error: err.message });
@@ -363,6 +372,7 @@ app.post('/api/ingest', (req, res) => {
 // Parses raw bytes directly through CpdStreamParser and broadcasts HISTORY.
 // The ring buffer (recordHistory) is NOT touched — import data is kept separately
 // so live serial history and file-import history never mix.
+// NOTE: imported data is NOT written to the session file (it is the source file).
 app.post('/api/import-cpd', (req, res) => {
   const filename = req.headers['x-filename'] ?? null;
   const chunks = [];
@@ -371,14 +381,12 @@ app.post('/api/import-cpd', (req, res) => {
     const raw = Buffer.concat(chunks);
     if (!raw.length) return res.status(400).json({ error: 'empty body' });
 
-    // Open a fresh session file to record the imported content
-    resetSessionFile();
-
     // Parse directly — no ring buffer involved, no DETACHED flush
+    // Do NOT open a new session file and do NOT write frames to it;
+    // the source .cpd already is the file; writing it again would be a duplicate.
     const records = [];
     const parser = new CpdStreamParser();
     parser.on('frame', (buf) => {
-      if (sessionFileStream) sessionFileStream.write(buf);
       const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
       records.push({ hex, ts: Date.now() });
     });
@@ -399,6 +407,51 @@ app.post('/api/import-cpd', (req, res) => {
   req.on('error', (err) => res.status(500).json({ error: err.message }));
 });
 
+// ----- Import a .cpd file by filesystem path (POST /api/import-cpd-by-path) -----
+// Body (JSON): { paths: string[] }  — already parsed by express.json() middleware.
+// The server reads the files directly and processes them like /api/import-cpd.
+// Used by the Electron renderer after dialog.showOpenDialog returns file paths.
+// NOTE: imported data is NOT written to the session file (it is the source file).
+app.post('/api/import-cpd-by-path', (req, res) => {
+  // express.json() has already parsed the body into req.body; do NOT re-read the stream.
+  const paths = req.body?.paths;
+  if (!Array.isArray(paths) || paths.length === 0) {
+    return res.status(400).json({ error: 'no paths provided' });
+  }
+
+  // Validate: only allow absolute paths to avoid path traversal
+  for (const p of paths) {
+    if (!path.isAbsolute(p)) return res.status(400).json({ error: `relative path rejected: ${p}` });
+  }
+
+  try {
+    const buffers = paths.map((p) => fs.readFileSync(p));
+    const raw = Buffer.concat(buffers);
+    const filename = paths.map((p) => path.basename(p)).join(', ');
+
+    // Parse directly — do NOT open a new session file and do NOT write frames to it;
+    // the source .cpd files are the originals; writing them again would be duplicates.
+    const records = [];
+    const parser = new CpdStreamParser();
+    parser.on('frame', (buf) => {
+      const hex = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+      records.push({ hex, ts: Date.now() });
+    });
+    parser.write(raw);
+    parser.end();
+
+    importedRecords  = records;
+    importedFilename = filename;
+
+    console.log(`[Import] Loaded ${importedRecords.length} record(s) from "${filename}" (by path)`);
+    broadcast({ type: 'HISTORY', records: importedRecords, filename: importedFilename });
+
+    res.json({ ok: true, records: importedRecords.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Fallback: serve React app for all other routes
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
@@ -412,6 +465,9 @@ app.get('*', (_req, res) => {
  */
 function startServer(port) {
   const p = port ?? PORT;
+  // Ensure logs/ directory exists (deferred so UCPD_USER_DATA is already set)
+  const logsDir = getLogsDir();
+  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   return new Promise((resolve, reject) => {
     server.listen(p, () => {
       console.log(`[Server] Listening on http://localhost:${p}`);
@@ -427,9 +483,31 @@ function startServer(port) {
   });
 }
 
+/**
+ * Graceful shutdown: disconnect serial port and flush session log file.
+ * Called by Electron's before-quit handler.
+ */
+function shutdown() {
+  // Close serial port without opening a new session file
+  if (activePort) {
+    try { activePort.close(); } catch (_) {}
+    activePort   = null;
+    activeParser = null;
+  }
+  serialStatus = { connected: false, port: null, baudRate: null };
+  console.log('[Server] Serial disconnected on shutdown');
+
+  // Flush and close session file
+  if (sessionFileStream) {
+    try { sessionFileStream.end(); } catch (_) {}
+    sessionFileStream = null;
+    console.log('[Server] Session file flushed on shutdown');
+  }
+}
+
 // Auto-start when invoked directly via `node server/index.js`
 if (require.main === module) {
   startServer();
 }
 
-module.exports = { startServer };
+module.exports = { startServer, shutdown };

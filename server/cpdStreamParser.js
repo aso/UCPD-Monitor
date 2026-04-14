@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 'use strict';
 
 const { Transform } = require('stream');

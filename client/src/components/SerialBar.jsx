@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useState, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './SerialBar.module.css';

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 /**
  * USB Power Delivery message parser — Rev 3.2 compliant
  *

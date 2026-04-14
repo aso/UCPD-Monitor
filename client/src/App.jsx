@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useCallback, useState } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useCpdImport } from './hooks/useCpdImport';
@@ -52,7 +54,7 @@ export default function App() {
   const serialConnected                 = useSerialConnected();
   const [dragging, setDragging]     = useState(false);
   const [showTopology, setShowTopology] = useState(true);
-  const [showConsole,  setShowConsole]  = useState(true);
+  const [showConsole,  setShowConsole]  = useState(false);
 
   const onDragOver = useCallback((e) => {
     e.preventDefault();
@@ -93,7 +95,10 @@ export default function App() {
 
       {/* Title bar — also hosts serial port controls */}
       <header className={styles.titleBar}>
-        <span className={styles.title}>STM32 UCPD Monitor</span>
+        <span className={styles.title}>
+          UCPD-Monitor
+          <span className={styles.titleVersion}>v{import.meta.env.VITE_APP_VERSION}</span>
+        </span>
         <StatusBadge />
         <ImportBadge />
         <button
@@ -106,8 +111,8 @@ export default function App() {
         <button
           className={`${styles.panelToggleBtn} ${showTopology ? styles.panelToggleActive : ''}`}
           onClick={() => setShowTopology((v) => !v)}
-          title="Toggle Topology panel"
-        >Topology</button>
+          title="Toggle Connection View panel"
+        >Connection View</button>
         <button
           className={`${styles.panelToggleBtn} ${showConsole ? styles.panelToggleActive : ''}`}
           onClick={() => setShowConsole((v) => !v)}
@@ -116,7 +121,7 @@ export default function App() {
         <SerialBar sendMessage={sendMessage} />
       </header>
 
-      {/* Topology strip */}
+      {/* Connection View strip */}
       {showTopology && <TopologyView />}
 
       {/* Main area: message table */}

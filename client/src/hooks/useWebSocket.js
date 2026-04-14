@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import { parseRawFrame, parseCpdFile, isUndecodedMessage, buildUnknownRecord } from '../parsers/pd_parser';
@@ -45,7 +47,11 @@ export function useWebSocket() {
           // Sent by server on every (re)connect — rebuilds messages + topology from ring buffer
           const records  = payload.records ?? [];
           const filename = payload.filename ?? null;
-          if (filename) setImportStatus({ filename });
+          if (filename) {
+            // File import: flush any live messages before loading imported data
+            clearMessages();
+            setImportStatus({ filename });
+          }
           appendLog(`[WS] Replaying ${records.length} record(s) from server history…`);
           const allFrames = [];
           const unknowns  = [];

@@ -1,6 +1,6 @@
 {
   "name": "usb-pd-monitor",
-  "version": "1.0.0",
+  "version": "3.2.0",
   "description": "STM32 UCPD Monitor — USB-PD CC Line Monitoring desktop app.",
   "main": "electron/main.js",
   "scripts": {
@@ -18,8 +18,9 @@
     "stm32"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "express": "^4.22.1",
     "serialport": "^13.0.0",
     "ws": "^8.20.0"
@@ -31,7 +32,7 @@
   },
   "build": {
     "appId": "com.stmicro.ucpd-monitor",
-    "productName": "STM32 UCPD Monitor",
+    "productName": "UCPD-Monitor",
     "directories": {
       "output": "dist-electron"
     },
@@ -56,6 +57,10 @@
     },
     "linux": {
       "target": "AppImage"
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
     }
   }
 }

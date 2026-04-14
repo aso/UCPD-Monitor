@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useState, useMemo, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './TopologyView.module.css';
@@ -41,6 +43,27 @@ function pdoBadge(pdo) {
     : pdo.pdoType;
 }
 
+// Compact one-line capability range (used in node cap list)
+function pdoRangeStr(pdo) {
+  if (!pdo) return '—';
+  switch (pdo.pdoType) {
+    case 'Fixed':
+      return `${(pdo.vMv / 1000).toFixed(2)}V  ${(pdo.iMa / 1000).toFixed(2)}A`;
+    case 'Battery':
+      return `${(pdo.vMinMv / 1000).toFixed(1)}–${(pdo.vMaxMv / 1000).toFixed(1)}V  ${(pdo.wMax / 1000).toFixed(0)}W`;
+    case 'Variable':
+      return `${(pdo.vMinMv / 1000).toFixed(1)}–${(pdo.vMaxMv / 1000).toFixed(1)}V  ${(pdo.iMa / 1000).toFixed(2)}A`;
+    case 'APDO_PPS':
+      return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V  ${(pdo.iMa / 1000).toFixed(2)}A`;
+    case 'APDO_AVS':
+      return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V  ${pdo.pdpW}W`;
+    case 'APDO_SPR_AVS':
+      return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V`;
+    default:
+      return pdo.raw ?? '—';
+  }
+}
+
 // ── Contract voltage helper ──────────────────────────────────
 
 function contractVoltStr(pdo) {
@@ -68,10 +91,23 @@ function buildSourceItems(source) {
 
   if (source.capabilities.length) {
     items.push({
-      key: 'Capabilities',
+      key: 'SRC Caps',
       value: `${source.capabilities.length} PDO${source.capabilities.length !== 1 ? 's' : ''}`,
       autoExpand: false,
       children: source.capabilities.map((pdo) => ({
+        key: `#${pdo.index} ${pdoBadge(pdo)}`,
+        value: pdoLabel(pdo),
+        color: PDO_COLORS[pdo.pdoType],
+      })),
+    });
+  }
+
+  if (source.snkCaps?.length) {
+    items.push({
+      key: 'SNK Caps',
+      value: `${source.snkCaps.length} PDO${source.snkCaps.length !== 1 ? 's' : ''}`,
+      autoExpand: false,
+      children: source.snkCaps.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
         color: PDO_COLORS[pdo.pdoType],
@@ -96,7 +132,7 @@ function buildSourceItems(source) {
       color: source.eprActive ? '#ffb74d' : '#4caf50',
       autoExpand: true,
       children: [
-        { key: 'PDO Type',    value: pdo?.pdoType ?? '—', color: PDO_COLORS[pdo?.pdoType] },
+        { key: 'PDO Type',    value: pdo ? pdoBadge(pdo) : '—', color: PDO_COLORS[pdo?.pdoType] },
         { key: 'PDO',         value: pdoLabel(pdo), color: PDO_COLORS[pdo?.pdoType] },
         ...(isAdjustable
           ? [
@@ -149,10 +185,23 @@ function buildSinkItems(sink) {
 
   if (sink.capabilities.length) {
     items.push({
-      key: 'Sink Caps',
+      key: 'SNK Caps',
       value: `${sink.capabilities.length} PDO${sink.capabilities.length !== 1 ? 's' : ''}`,
       autoExpand: false,
       children: sink.capabilities.map((pdo) => ({
+        key: `#${pdo.index} ${pdoBadge(pdo)}`,
+        value: pdoLabel(pdo),
+        color: PDO_COLORS[pdo.pdoType],
+      })),
+    });
+  }
+
+  if (sink.srcCaps?.length) {
+    items.push({
+      key: 'SRC Caps',
+      value: `${sink.srcCaps.length} PDO${sink.srcCaps.length !== 1 ? 's' : ''}`,
+      autoExpand: false,
+      children: sink.srcCaps.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
         color: PDO_COLORS[pdo.pdoType],
@@ -304,40 +353,371 @@ function nodeState(connected, eprActive, hasContract) {
   return 'active';
 }
 
-function NodeBox({ label, sub, state }) {
-  const boxCls = { inactive: styles.nodeInactive, active: styles.nodeActive, contract: styles.nodeContract, epr: styles.nodeEPR }[state] ?? styles.nodeInactive;
-  const dotCls = { inactive: styles.dotGray, active: styles.dotGreen, contract: styles.dotBlue, epr: styles.dotOrange }[state] ?? styles.dotGray;
+function MeterPanel({ rows }) {
   return (
-    <div className={`${styles.node} ${boxCls}`}>
-      <div className={styles.nodeHeader}>
-        <span className={`${styles.statusDot} ${dotCls}`} />
-        <span className={styles.nodeLabel}>{label}</span>
-      </div>
-      {sub && <div className={styles.nodeSub}>{sub}</div>}
+    <div className={styles.meterPanel}>
+      {rows.map((row, i) => (
+        <div key={i} className={styles.meterRow}>
+          <span className={styles.meterLabel}>{row.label}</span>
+          <span className={styles.meterValue} style={row.color ? { color: row.color } : undefined}>
+            {row.value}
+          </span>
+          <span className={styles.meterUnit}>{row.unit}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-function Cable({ state }) {
-  const cls = {
+// ── Compact PDO capability list (inside node box) ──────────
+
+// Fixed column order — always shown; null = n/a → dim
+// I.min / P.min omitted: always null across all PDO types
+const GRID_COLS_SRC = [
+  { key: 'vMax', label: 'V.max', unit: 'V' },
+  { key: 'vMin', label: 'V.min', unit: 'V' },
+  { key: 'iMax', label: 'I.max', unit: 'A' },
+  { key: 'pMax', label: 'P.max', unit: 'W' },
+];
+const GRID_COLS_SNK = [
+  { key: 'vMax', label: 'V.max', unit: 'V' },
+  { key: 'vMin', label: 'V.min', unit: 'V' },
+  { key: 'iMax', label: 'I.op',  unit: 'A' },
+  { key: 'pMax', label: 'P.op',  unit: 'W' },
+];
+
+// Format a milli-unit value for display. Returns '—' when null.
+function fmtCell(valMilli, unit) {
+  if (valMilli == null) return '—';
+  const n = valMilli / 1000;
+  return `${n < 10 ? n.toFixed(2) : n.toFixed(1)}${unit}`;
+}
+
+// Extract the 4-column grid values (all in milli-units) from a PDO object.
+// I.min / P.min omitted — always null across all PDO types.
+function pdoToGrid(pdo) {
+  const _ = null;
+  switch (pdo.pdoType) {
+    case 'Fixed':
+      return { vMax: pdo.vMv,    vMin: _,          iMax: pdo.iMa,            pMax: _                                     };
+    case 'Battery':
+      return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: _,                  pMax: pdo.wMax                               };
+    case 'Variable':
+      return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa,            pMax: _                                     };
+    case 'APDO_PPS':
+      return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa,            pMax: _                                     };
+    case 'APDO_AVS':
+      return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: _,                  pMax: pdo.pdpW != null ? pdo.pdpW * 1000 : _ };
+    case 'APDO_SPR_AVS':
+      return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa_9_15 ?? _, pMax: _                                     };
+    default:
+      return { vMax: pdo.vMv ?? pdo.vMaxMv ?? _, vMin: pdo.vMinMv ?? _, iMax: pdo.iMa ?? _, pMax: _ };
+  }
+}
+
+function CapList({ caps, selectedObjPos, rdo, isSink = false }) {
+  const gridCols = isSink ? GRID_COLS_SNK : GRID_COLS_SRC;
+  return (
+    <div className={styles.capList}>
+      {/* Sticky header */}
+      <div className={styles.capHeader}>
+        <span /><span />
+        {gridCols.map(col => (
+          <span key={col.key} className={styles.capHeaderCell}>{col.label}</span>
+        ))}
+      </div>
+      {/* PDO rows */}
+      {caps.map((pdo) => {
+        const sel = pdo.index === selectedObjPos;
+        const grid = pdoToGrid(pdo);
+        const color = PDO_COLORS[pdo.pdoType];
+        return (
+          <div
+            key={pdo.index}
+            className={`${styles.capRow} ${sel ? styles.capRowSelected : ''}`}
+          >
+            <span className={styles.capIdx} style={sel ? { color: '#a5d6a7' } : undefined}>
+              #{pdo.index}
+            </span>
+            <span
+              className={styles.capBadgeChip}
+              style={{ color, borderColor: color, background: color + '22' }}
+            >
+              {pdoBadge(pdo)}
+            </span>
+            {gridCols.map(col => {
+              const val = grid[col.key];
+              return (
+                <span key={col.key} className={val != null ? styles.capCellLit : styles.capCellDim}>
+                  {fmtCell(val, col.unit)}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+      {/* RDO row */}
+      {rdo && (() => {
+        const { objPos, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = rdo;
+        const isAdj = rdoType === 'PPS' || rdoType === 'AVS';
+        const isBat = rdoType === 'Battery';
+        const rdoStr = isAdj && opVoltage_mV != null
+          ? `#${objPos}  ${(opVoltage_mV / 1000).toFixed(2)}V  ${(opCurrent_mA / 1000).toFixed(2)}A`
+          : isBat
+            ? `#${objPos}  ${(opPower_mW / 1000).toFixed(2)}W`
+            : `#${objPos}  ${(opCurrent_mA / 1000).toFixed(2)}A`;
+        return (
+          <div className={styles.rdoRow}>
+            <span className={styles.rdoLabel}>RDO</span>
+            <span className={styles.rdoValue}>{rdoStr}</span>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+const PDO_TYPE_DEFS = [
+  { key: 'Fixed',        label: 'FIX',   color: '#80deea' },
+  { key: 'Battery',      label: 'BAT',   color: '#ffcc80' },
+  { key: 'Variable',     label: 'VAR',   color: '#b39ddb' },
+  { key: 'APDO_PPS',     label: 'PPS',   color: '#a5d6a7' },
+  { key: 'APDO_AVS',     label: 'AVS',   color: '#f48fb1' },
+  { key: 'APDO_SPR_AVS', label: 'S-AVS', color: '#ce93d8' },
+];
+
+function PdoTypeLamps({ pdoType }) {
+  return (
+    <div className={styles.pdoLamps}>
+      {PDO_TYPE_DEFS.map(({ key, label, color }) => {
+        const active = pdoType === key;
+        return (
+          <span
+            key={key}
+            className={`${styles.pdoLamp} ${active ? styles.pdoLampActive : ''}`}
+            style={active ? { color, borderColor: color, textShadow: `0 0 6px ${color}88` } : undefined}
+          >
+            {label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// EPR-only lamp — dim when SPR mode, lit when EPR mode, invisible when null
+function EprLamp({ mode }) {
+  if (mode == null) return null;
+  const lit = mode === 'epr';
+  return (
+    <div className={`${styles.eprLamp} ${lit ? styles.eprLampLit : styles.eprLampDim}`}>
+      <span className={styles.eprLampDot} />
+      EPR
+    </div>
+  );
+}
+
+// ── RDO detail panel (inside sink right column) ──────────────
+
+function RdoPanel({ rdo }) {
+  const { objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA,
+          opPower_mW, limPower_mW, giveBack, capMismatch, rdoType } = rdo;
+  const isAdj = rdoType === 'PPS' || rdoType === 'AVS';
+  const isBat = rdoType === 'Battery';
+  return (
+    <div className={styles.rdoPanel}>
+      <span className={styles.rdoPanelTitle}>RDO</span>
+      <div className={styles.rdoPanelRow}>
+        <span className={styles.rdoPanelKey}>PDO #</span>
+        <span className={styles.rdoPanelVal}>{objPos}</span>
+      </div>
+      <div className={styles.rdoPanelRow}>
+        <span className={styles.rdoPanelKey}>Type</span>
+        <span className={styles.rdoPanelVal}>{rdoType ?? 'Fixed'}</span>
+      </div>
+      {isAdj && opVoltage_mV != null && (
+        <div className={styles.rdoPanelRow}>
+          <span className={styles.rdoPanelKey}>V.req</span>
+          <span className={styles.rdoPanelVal}>{(opVoltage_mV / 1000).toFixed(2)} V</span>
+        </div>
+      )}
+      {isBat ? (
+        <>
+          <div className={styles.rdoPanelRow}>
+            <span className={styles.rdoPanelKey}>P.op</span>
+            <span className={styles.rdoPanelVal}>{(opPower_mW / 1000).toFixed(2)} W</span>
+          </div>
+          <div className={styles.rdoPanelRow}>
+            <span className={styles.rdoPanelKey}>{giveBack ? 'P.min' : 'P.max'}</span>
+            <span className={styles.rdoPanelVal}>{(limPower_mW / 1000).toFixed(2)} W</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={styles.rdoPanelRow}>
+            <span className={styles.rdoPanelKey}>I.op</span>
+            <span className={styles.rdoPanelVal}>{(opCurrent_mA / 1000).toFixed(2)} A</span>
+          </div>
+          {!isAdj && maxCurrent_mA != null && (
+            <div className={styles.rdoPanelRow}>
+              <span className={styles.rdoPanelKey}>I.max</span>
+              <span className={styles.rdoPanelVal}>{(maxCurrent_mA / 1000).toFixed(2)} A</span>
+            </div>
+          )}
+        </>
+      )}
+      {giveBack    && <div className={styles.rdoPanelFlag} style={{ color: '#90caf9' }}>GiveBack</div>}
+      {capMismatch && <div className={styles.rdoPanelFlag} style={{ color: '#ff9800' }}>⚠ CapMismatch</div>}
+    </div>
+  );
+}
+
+// ── Sink two-column layout ──────────────────────────────────────
+//  Left col : SNK PDO caps
+//  Right col : RDO panel + SRC PDO caps (SRC only when advertised)
+
+function SinkContent({ sink }) {
+  const hasSnkCaps = sink.capabilities.length > 0;
+  const hasSrcCaps = sink.srcCaps?.length > 0;
+  const hasRdo     = !!sink.lastRequest;
+  const hasRight   = hasRdo || hasSrcCaps;
+  // RDO (+ SRC CAP) is always on the Source-side (left), SNK CAP on the far side (right)
+  return (
+    <div className={styles.sinkColumns}>
+      {hasRight && (
+        <div className={styles.sinkColRdo}>
+          {hasRdo && <RdoPanel rdo={sink.lastRequest} />}
+          {hasSrcCaps && (
+            <div style={{ marginTop: hasRdo ? 4 : 0 }}>
+              <div className={styles.sinkColLabel}>SRC CAP</div>
+              <CapList caps={sink.srcCaps} selectedObjPos={null} />
+            </div>
+          )}
+        </div>
+      )}
+      {hasSnkCaps && (
+        <div className={styles.sinkColSnk}>
+          <CapList caps={sink.capabilities} selectedObjPos={null} isSink={true} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Contract values inside eMarker ────────────────────
+
+function ContractInRow({ label, value, unit, color }) {
+  return (
+    <div className={styles.contractInRow}>
+      <span className={styles.contractInLabel}>{label}</span>
+      <span className={styles.contractInValue} style={{ color }}>{value}</span>
+      <span className={styles.contractInUnit}>{unit}</span>
+    </div>
+  );
+}
+
+function ContractInMarker({ contract }) {
+  const DIM = '#0e2a0e';
+  if (!contract) {
+    return (
+      <div className={styles.contractIn}>
+        <ContractInRow label="Contract.V" value="---.---" unit="V" color={DIM} />
+        <ContractInRow label="Contract.I" value="---.---"  unit="A" color={DIM} />
+      </div>
+    );
+  }
+  const { pdo, objPos, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = contract;
+  const isAdj     = rdoType === 'PPS' || rdoType === 'AVS';
+  const isBattery = rdoType === 'Battery';
+  const vMv = isAdj ? opVoltage_mV
+    : pdo?.pdoType === 'Fixed' ? pdo.vMv
+    : null;
+  return (
+    <div className={styles.contractIn}>
+      <span className={styles.contractInPdo}>PDO #{objPos}</span>
+      <ContractInRow
+        label="Contract.V"
+        value={vMv != null ? (vMv / 1000).toFixed(3) : '---.---'}
+        unit="V"
+        color="#80deea"
+      />
+      {isBattery
+        ? <ContractInRow
+            label="Contract.P"
+            value={opPower_mW != null ? (opPower_mW / 1000).toFixed(2) : '---.--'}
+            unit="W"
+            color="#ffcc80"
+          />
+        : <ContractInRow
+            label="Contract.I"
+            value={opCurrent_mA != null ? (opCurrent_mA / 1000).toFixed(3) : '---.---'}
+            unit="A"
+            color="#a5d6a7"
+          />
+      }
+    </div>
+  );
+}
+
+function NodeBox({ label, sub, meterRows, capList, mode, state, narrow }) {
+  const boxCls = { inactive: styles.nodeInactive, active: styles.nodeActive, contract: styles.nodeContract, epr: styles.nodeEPR }[state] ?? styles.nodeInactive;
+  const dotCls = { inactive: styles.dotGray, active: styles.dotGreen, contract: styles.dotBlue, epr: styles.dotOrange }[state] ?? styles.dotGray;
+  return (
+    <div className={`${styles.node} ${boxCls} ${narrow ? styles.nodeNarrow : ''}`}>
+      <EprLamp mode={mode} />
+      <div className={styles.nodeHeader}>
+        <span className={`${styles.statusDot} ${dotCls}`} />
+        <span className={styles.nodeLabel}>{label}</span>
+      </div>
+      {capList != null
+        ? capList
+        : meterRows?.length
+          ? <MeterPanel rows={meterRows} />
+          : sub
+            ? <div className={styles.nodeSub}>{sub}</div>
+            : null}
+    </div>
+  );
+}
+
+function CableWithEMarker({ state, sop1, sop2, contract }) {
+  const trackCls = {
     inactive: styles.cableInactive,
     active:   styles.cableActive,
     contract: styles.cableContract,
     epr:      styles.cableEPR,
   }[state] ?? styles.cableInactive;
-  return <div className={`${styles.cable} ${cls}`} />;
-}
-
-function EMarkerBox({ sop1, sop2 }) {
+  const dotCls = { inactive: styles.dotGray, active: styles.dotGreen, contract: styles.dotBlue, epr: styles.dotOrange }[state] ?? styles.dotGray;
   const anyDetected = sop1 || sop2;
   return (
-    <div className={`${styles.eMarker} ${anyDetected ? styles.eMarkerActive : ''}`}>
-      <div className={styles.eMarkerTitle}>eMarker</div>
-      <div className={styles.eMarkerSops}>
-        <span style={{ color: sop1 ? '#4caf50' : '#334' }}>SOP'</span>
-        <span className={styles.eMarkerSep}>/</span>
-        <span style={{ color: sop2 ? '#4caf50' : '#334' }}>SOP''</span>
+    <div className={styles.cableChain}>
+      <div className={`${styles.cableTrack} ${trackCls}`} />
+      <div className={`${styles.eMarker} ${anyDetected ? styles.eMarkerActive : ''}`}>
+        <div className={styles.nodeHeader}>
+          <span className={`${styles.statusDot} ${dotCls}`} />
+          <span className={styles.nodeLabel}>Contract</span>
+        </div>
+        <div className={styles.eMarkerSops}>
+          <span style={{ color: sop1 ? '#33dd33' : '#1a3a1a' }}>SOP’</span>
+          <span className={styles.eMarkerSep}>/</span>
+          <span style={{ color: sop2 ? '#33dd33' : '#1a3a1a' }}>SOP’’</span>
+        </div>
+        <ContractInMarker contract={contract} />
       </div>
+    </div>
+  );
+}
+
+function ContractBox({ contract, state }) {
+  const boxCls = { inactive: styles.nodeInactive, active: styles.nodeActive, contract: styles.nodeContract, epr: styles.nodeEPR }[state] ?? styles.nodeInactive;
+  const dotCls = { inactive: styles.dotGray, active: styles.dotGreen, contract: styles.dotBlue, epr: styles.dotOrange }[state] ?? styles.dotGray;
+  return (
+    <div className={`${styles.node} ${styles.nodeContract_box} ${boxCls}`}>
+      <div className={styles.nodeHeader}>
+        <span className={`${styles.statusDot} ${dotCls}`} />
+        <span className={styles.nodeLabel}>Contract</span>
+      </div>
+      <ContractInMarker contract={contract} />
     </div>
   );
 }
@@ -364,61 +744,35 @@ export default function TopologyView() {
 
   const srcItems   = useMemo(() => buildSourceItems(source), [source]);
   const snkItems   = useMemo(() => buildSinkItems(sink), [sink]);
-  const cableItems = useMemo(() => buildCableItems(eMarker), [eMarker]);
 
-  const srcSub = (() => {
-    if (!source.contract) return source.connected ? (source.eprActive ? 'EPR' : 'PD') : '';
-    const { pdo, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = source.contract;
-    const isAdj     = rdoType === 'PPS' || rdoType === 'AVS';
-    const isBattery = rdoType === 'Battery';
-    const eprBadge  = source.eprActive ? ' EPR' : '';
-    // Actual output voltage confirmed by PS_RDY
-    const vStr = isAdj && opVoltage_mV != null
-      ? `${(opVoltage_mV / 1000).toFixed(2)} V`
-      : pdo?.pdoType === 'Fixed' && pdo?.vMv != null
-        ? `${(pdo.vMv / 1000).toFixed(2)} V`
-        : contractVoltStr(pdo);   // Variable/Battery: show range
-    // Output current setting
-    const iStr = isBattery
-      ? `${(opPower_mW  / 1000).toFixed(2)} W`
-      : `${(opCurrent_mA / 1000).toFixed(2)} A`;
-    return `${vStr} / ${iStr}${eprBadge}`;
-  })();
+  // Simple text sub when no cap list is available (rarely shown)
+  const srcSub = source.connected ? (source.eprActive ? 'EPR' : 'PD') : '';
+  const snkSub = sink.connected   ? (sink.eprActive   ? 'EPR' : 'PD') : '';
 
-  const snkSub = (() => {
-    if (!sink.lastRequest) return sink.connected ? (sink.eprActive ? 'EPR' : 'PD') : '';
-    const { objPos, opVoltage_mV, opCurrent_mA, opPower_mW, rdoType } = sink.lastRequest;
-    const isAdj     = rdoType === 'PPS' || rdoType === 'AVS';
-    const isBattery = rdoType === 'Battery';
-    const eprBadge  = sink.eprActive ? ' EPR' : '';
-    // Look up the source PDO to get exact voltage for Fixed/Variable
-    const srcPdo = source.capabilities[objPos - 1] ?? null;
-    const vMvFixed = srcPdo?.pdoType === 'Fixed' ? srcPdo.vMv : null;
-    // Requested voltage
-    const vStr = isAdj && opVoltage_mV != null
-      ? `${(opVoltage_mV / 1000).toFixed(2)} V`
-      : vMvFixed != null
-        ? `${(vMvFixed / 1000).toFixed(2)} V`
-        : srcPdo ? contractVoltStr(srcPdo) : '—';
-    // Requested power = V × I (or opPower_mW for Battery)
-    let pStr;
-    if (isBattery) {
-      pStr = `${(opPower_mW / 1000).toFixed(2)} W`;
-    } else if (opCurrent_mA != null) {
-      const vForPwr = isAdj ? opVoltage_mV : vMvFixed;
-      pStr = vForPwr != null
-        ? `${((vForPwr * opCurrent_mA) / 1e6).toFixed(2)} W`
-        : `${(opCurrent_mA / 1000).toFixed(2)} A`;
-    } else {
-      pStr = '—';
-    }
-    return `${vStr} / ${pStr}${eprBadge}`;
-  })();
+  // ── Cap lists for SOURCE and SINK node boxes ────────────────
+  const srcCapList = useMemo(() => {
+    if (!source.connected || !source.capabilities.length) return null;
+    return (
+      <CapList
+        caps={source.capabilities}
+        selectedObjPos={source.contract?.objPos ?? null}
+      />
+    );
+  }, [source.connected, source.capabilities, source.contract?.objPos]);
+
+  const snkCapList = useMemo(() => {
+    if (!sink.connected) return null;
+    if (!sink.capabilities.length && !sink.lastRequest) return null;
+    return <SinkContent sink={sink} />;
+  }, [sink.connected, sink.capabilities, sink.lastRequest, sink.srcCaps]);
+
+  const snkNarrow = sink.connected && !sink.capabilities.length && !!sink.lastRequest;
+  const contractState = source.eprActive ? 'epr' : source.contract ? 'contract' : source.connected ? 'active' : 'inactive';
 
   return (
     <section className={styles.wrapper}>
       <header className={styles.header}>
-        <span>Topology</span>
+        <span>Connection View</span>
         <button onClick={handleRefresh} className={styles.resetBtn}>Refresh</button>
       </header>
       <div className={styles.body}>
@@ -426,16 +780,12 @@ export default function TopologyView() {
 
         <div className={styles.center}>
           <div className={styles.chain}>
-            <NodeBox label="SOURCE" sub={srcSub} state={srcState} />
-            <Cable state={cableState} />
-            <EMarkerBox sop1={eMarker.sop1Detected} sop2={eMarker.sop2Detected} />
-            <Cable state={cableState} />
-            <NodeBox label="SINK" sub={snkSub} state={snkState} />
+            <NodeBox label="SOURCE" capList={srcCapList} sub={srcSub} mode={source.eprActive ? 'epr' : source.contract ? 'spr' : null} state={srcState} />
+            <CableWithEMarker state={contractState} sop1={eMarker.sop1} sop2={eMarker.sop2} contract={source.contract} />
+            <NodeBox label="SINK" capList={snkCapList} sub={snkSub} mode={sink.eprActive ? 'epr' : sink.lastRequest ? 'spr' : null} state={snkState} narrow={snkNarrow} />
           </div>
-
         </div>
 
-        <PropPanel title="Cable" items={cableItems} />
         <PropPanel title="Sink" items={snkItems} />
       </div>
     </section>

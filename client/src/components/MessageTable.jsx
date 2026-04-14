@@ -1,17 +1,20 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 AsO
 import { useMemo, useState, useCallback, useEffect, useRef, memo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from '../store/appStore';
 import { decodeDataObjects, decodePDO, buildRdoSummary } from '../parsers/pd_parser';
 import styles from './MessageTable.module.css';
 
-/** Format a microsecond-since-boot uint32 as MM:SS.μμμμμμ */
-function formatUsTs(us) {
-  const totalSec = Math.floor(us / 1_000_000);
-  const rem      = us % 1_000_000;
-  const mm       = Math.floor(totalSec / 60).toString().padStart(2, '0');
+/** Format a millisecond-since-boot uint32 as HH:MM:SS.mmm */
+function formatMsTs(ms) {
+  const totalSec = Math.floor(ms / 1_000);
+  const rem      = ms % 1_000;
+  const hh       = Math.floor(totalSec / 3600).toString().padStart(2, '0');
+  const mm       = Math.floor((totalSec % 3600) / 60).toString().padStart(2, '0');
   const ss       = (totalSec % 60).toString().padStart(2, '0');
-  const frac     = rem.toString().padStart(6, '0');
-  return `${mm}:${ss}.${frac}`;
+  const frac     = rem.toString().padStart(3, '0');
+  return `${hh}:${mm}:${ss}.${frac}`;
 }
 
 const SOP_QUAL_COLORS = {
@@ -100,7 +103,7 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
         </span>
       </td>
       <td colSpan={5} className={styles.resolvedPdoDetail}>{details.join('  │  ')}</td>
-      <td colSpan={2} className={styles.childRaw}>{pdo.raw}</td>
+      <td colSpan={1} className={styles.childRaw}>{pdo.raw}</td>
     </tr>
   );
 }
@@ -176,7 +179,7 @@ function PdoRow({ child, isParentSelected }) {
           <span className={styles.treeL}>└</span>
           <span className={styles.fieldLabel}>{child.label}</span>
         </td>
-        <td colSpan={7} className={styles.childLabel}>{child.value}</td>
+        <td colSpan={6} className={styles.childLabel}>{child.value}</td>
       </tr>
     );
   }
@@ -209,7 +212,7 @@ function PdoRow({ child, isParentSelected }) {
       <td colSpan={5} className={styles.childLabel}>
         {isEprMode ? child.label : details.join('  │  ')}
       </td>
-      <td colSpan={2} className={styles.childRaw}>{child.raw}</td>
+      <td colSpan={1} className={styles.childRaw}>{child.raw}</td>
     </tr>
   );
 }
@@ -262,7 +265,7 @@ const MessageRow = memo(function MessageRow({
           {msg.id}
         </td>
         <td className={styles.ts}>
-          {cpd ? formatUsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23)}
+          {cpd ? formatMsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23)}
         </td>
         <td style={{ color: dirInfo.color, fontWeight: 'bold' }}>
           {dirInfo.label}
@@ -311,7 +314,7 @@ const MessageRow = memo(function MessageRow({
 
 /** Format one message as a tab-separated line for clipboard copy */
 function formatMsgForCopy(msg) {
-  const ts   = msg.cpd ? formatUsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23);
+  const ts   = msg.cpd ? formatMsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23);
   const dir  = msg.cpd?.dirName ?? (msg.recordType === 'EVENT' ? 'EVENT' : 'LOG');
   const sop  = msg.cpd?.sopQualName ?? '';
   const rev  = msg.header?.specRevision ?? '';
@@ -343,6 +346,38 @@ export default function MessageTable() {
   const [expandedIds,    setExpandedIds]    = useState(new Set());
 
   const wrapperRef = useRef(null);
+
+  // ── Resizable columns ──────────────────────────────────────────
+  // Widths in px; null = auto (last column fills remaining space).
+  const DEFAULT_WIDTHS  = [72, 104, 152, 68, 38, 54, 200, 38, null];
+  // Minimum drag width per column (last column enforced via table min-width)
+  const MIN_COL_WIDTHS  = [44, 76,  100, 44, 28, 40, 80,  28, 80];
+  const [colWidths, setColWidths] = useState(DEFAULT_WIDTHS);
+
+  // min-width of the whole table = sum of all per-column minimums (keeps last col visible)
+  const tableMinWidth = MIN_COL_WIDTHS.reduce((s, w) => s + w, 0);
+
+  const startResize = useCallback((colIndex, e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = colWidths[colIndex] ?? 80;
+    const minW   = MIN_COL_WIDTHS[colIndex] ?? 30;
+
+    const onMove = (mv) => {
+      const delta = mv.clientX - startX;
+      setColWidths((prev) => {
+        const next = [...prev];
+        next[colIndex] = Math.max(minW, startW + delta);
+        return next;
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }, [colWidths]);
 
   const rows = useMemo(
     () => newestAtBottom ? messages : [...messages].reverse(),
@@ -480,23 +515,43 @@ export default function MessageTable() {
           className={styles.tableWrapper}
           onScroll={handleScroll}
         >
-          <table className={styles.table}>
+          <table className={styles.table} style={{ width: '100%', minWidth: tableMinWidth }}>
+            <colgroup>
+              {colWidths.map((w, i) => (
+                <col key={i} style={w != null ? { width: w } : {}} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th>#</th>
+                <th>#
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(0, e)} />
+                </th>
                 <th
                   className={styles.thSort}
                   onClick={() => setNewestAtBottom((v) => !v)}
                   title={newestAtBottom ? 'Newest at bottom — click to flip' : 'Newest at top — click to flip'}
                 >
                   Timestamp {newestAtBottom ? '↓' : '↑'}
+                  <span className={styles.resizeHandle} onMouseDown={(e) => { e.stopPropagation(); startResize(1, e); }} />
                 </th>
-                <th>Dir / Role</th>
-                <th>SOP</th>
-                <th>Rev</th>
-                <th>MsgID</th>
-                <th>Type</th>
-                <th title="Number of Data Objects">#DO</th>
+                <th>Dir / Role
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(2, e)} />
+                </th>
+                <th>SOP
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(3, e)} />
+                </th>
+                <th>Rev
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(4, e)} />
+                </th>
+                <th>MsgID
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(5, e)} />
+                </th>
+                <th>Type
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(6, e)} />
+                </th>
+                <th title="Number of Data Objects">#DO
+                  <span className={styles.resizeHandle} onMouseDown={(e) => startResize(7, e)} />
+                </th>
                 <th
                   className={styles.thRaw}
                   onClick={() => setShowRaw((v) => !v)}

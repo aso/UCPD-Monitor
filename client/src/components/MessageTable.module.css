@@ -194,6 +194,35 @@
   margin-right: 4px;
 }
 
+/* VDO section header row (ID HEADER, CERT STAT, PRODUCT, etc.) */
+.vdoSection {
+  color: #7eb8d4;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.vdoSectionClickable {
+  cursor: pointer;
+  user-select: none;
+}
+.vdoSectionClickable:hover {
+  filter: brightness(1.15);
+}
+
+.sectionExpander {
+  color: #7eb8d4;
+  font-size: 10px;
+  margin-right: 3px;
+}
+
+.treeLIndented {
+  color: #444;
+  margin-right: 4px;
+  margin-left: 24px;
+}
+
 .childIndex {
   color: #666;
   font-size: 11px;

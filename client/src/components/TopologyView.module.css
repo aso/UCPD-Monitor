@@ -11,6 +11,7 @@
   flex-direction: column;
   user-select: none;
   flex-shrink: 0;
+  position: relative;
 }
 
 /* ── Header bar ─────────────────────────────────────────────── */
@@ -50,8 +51,22 @@
 .body {
   display: flex;
   flex-direction: row;
-  height: auto;
-  overflow: visible;
+  overflow: hidden;
+}
+
+/* Horizontal resize bar between body and message table */
+.heightResizeBar {
+  height: 5px;
+  background: #0a140a;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+.heightResizeBar:hover,
+.heightResizeBar.dragging {
+  background: #1a3a1a;
 }
 
 /* ── Side property panels ───────────────────────────────────── */
@@ -59,20 +74,31 @@
   width: 200px;
   flex-shrink: 0;
   overflow-y: auto;
-  border-right: 1px solid #0a140a;
+  overflow-x: hidden;
   background: #070c07;
   font-family: 'Consolas', 'Menlo', monospace;
   scrollbar-width: thin;
   scrollbar-color: #1a2a1a transparent;
+  position: relative;
 }
 .sidePanel:last-child {
   border-right: none;
-  border-left: 1px solid #0a140a;
+  border-left: none;
 }
 .sidePanel:nth-child(3) {
-  width: 150px;
-  border-left: 1px solid #0a140a;
+  border-left: none;
 }
+
+/* Drag separator between PropPanel and center — sits outside the panel content */
+.panelSep {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: ew-resize;
+  background: #0a140a;
+  transition: background 0.15s;
+  align-self: stretch;
+}
+.panelSep:hover { background: #1a3a1a; }
 
 .panelTitle {
   font-size: 8px;
@@ -576,9 +602,91 @@
 /* ── Sink two-column layout ─────────────────────────────────── */
 .sinkColumns {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+
+/* Inner row: RDO col + SNK CAP col side by side */
+.sinkColumnsInner {
+  display: flex;
+  flex-direction: row;
   gap: 6px;
   align-items: flex-start;
 }
+
+/* ── Sink spec badge \u2014 shown at top of SINK node box \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */
+.sinkSpecBadge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #070f07;
+  border: 1px solid #1a2a1a;
+  border-radius: 3px;
+  padding: 2px 6px;
+  gap: 6px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  flex-shrink: 0;
+}
+
+.sinkSpecVendor {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sinkSpecVendorName {
+  font-size: 10px;
+  font-weight: 700;
+  color: #80deea;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sinkSpecPid {
+  font-size: 8px;
+  color: #3a6a3a;
+  white-space: nowrap;
+}
+
+.sinkSpecRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.sinkSpecEpr {
+  font-size: 8px;
+  font-weight: 700;
+  color: #7ab07a;
+  letter-spacing: 1px;
+  border: 1px solid #3a6a3a;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
+/* Generic capability badge (VDM, Cap_Ext, …) */
+.sinkSpecCap {
+  font-size: 8px;
+  font-weight: 600;
+  color: #90caf9;
+  border: 1px solid #2a4a6a;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
+.sinkSpecPdp {
+  font-size: 10px;
+  font-weight: 700;
+  color: #a5d6a7;
+  white-space: nowrap;
+}
+
+
 
 .sinkCol {
   flex: 1;

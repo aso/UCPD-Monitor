@@ -724,7 +724,7 @@ const VDM_CMD_TYPE = ['REQ', 'ACK', 'NAK', 'BUSY'];
 
 /** Well-known SVIDs */
 const VDM_SVID_NAMES = {
-  0xFF00: 'SOP',       // used during identity discovery (no Alt Mode)
+  0xFF00: 'PD SID',    // USB PD Standard ID (Table 6.32, §6.4.4.2.1)
   0xFF01: 'DP',        // VESA DisplayPort Alt Mode
   0x8087: 'TBT3',     // Intel Thunderbolt 3
   0x04B4: 'Cypress',
@@ -747,54 +747,288 @@ function fmtSvid(svid) {
  * DO order:  ID Header VDO, Cert Stat VDO, Product VDO, [Product Type VDO(s)]
  */
 function decodeDiscoverIdentityVDOs(vdos) {
+  // Returns a flat array of section-header + field rows for tree display.
+  // Section headers: { label, raw, section: true }
+  // Field rows:      { label, value }  (isKeyValue in PdoRow)
+  // Warning rows:    { label, raw }    (isVdoRow, warning text starts with ⚠)
   const out = [];
   const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  const bin3  = (v) => v.toString(2).padStart(3, '0');
+  const bin2  = (v) => v.toString(2).padStart(2, '0');
 
-  // ---- VDO[1] ID Header VDO (Table 6.41) ----
+  // Common USB Vendor IDs (representative subset)
+  const VID_NAMES = {
+    0x03F0: 'HP', 0x0403: 'FTDI', 0x0451: 'TI', 0x046D: 'Logitech',
+    0x04B4: 'Cypress', 0x04CC: 'OPPO', 0x04D8: 'Microchip',
+    0x04E8: 'Samsung', 0x0483: 'STMicro', 0x05AC: 'Apple',
+    0x06CB: 'Synaptics', 0x0955: 'NVIDIA', 0x0B05: 'ASUS',
+    0x0BDA: 'Realtek', 0x17EF: 'Lenovo', 0x18D1: 'Google',
+    0x2109: 'VIA Labs', 0x8087: 'Intel',
+  };
+
+  const USB_SPD_NAMES = [
+    'USB2.0 only', 'USB3.2 Gen1', 'USB3.2/USB4 Gen2',
+    'USB4 Gen3', 'USB4 Gen4', 'Rsvd', 'Rsvd', 'Rsvd',
+  ];
+  const PLUG_TYPE_NAMES = ['Rsvd', 'Rsvd', 'USB-C', 'Captive'];
+  const MAX_VBUS_NAMES  = ['20V', '20V(was30V⚠)', '20V(was40V⚠)', '50V'];
+
+  // ---- VDO[1] ID Header VDO (Table 6.34, §6.4.4.3.1.1) ----
   if (vdos.length >= 1) {
-    const dw   = vdos[0];
-    const vid  = dw & 0xFFFF;
-    const connType = (dw >>> 24) & 0x3; // bits[25:24]
-    const connNames = ['Rsvd', 'USB-A', 'USB-B', 'USB-C'];
-    const flags = [
-      (dw >>> 31) & 1 ? 'USB Host' : null,
-      (dw >>> 30) & 1 ? 'USB Device' : null,
-      (dw >>> 29) & 1 ? 'Modal Op' : null,
-      (dw >>> 28) & 1 ? 'USB4' : null,
-    ].filter(Boolean).join(', ') || 'none';
-    out.push({
-      label: `ID Header VDO — VID=0x${vid.toString(16).toUpperCase().padStart(4,'0')} Conn=${connNames[connType]} Flags=[${flags}]`,
-      raw: hex32(dw),
-    });
+    const dw       = vdos[0];
+    const vid      = dw & 0xFFFF;
+    const usbHost  = (dw >>> 31) & 1;   // B31
+    const usbDev   = (dw >>> 30) & 1;   // B30
+    const ufpType  = (dw >>> 27) & 0x7; // B29:27
+    const modalOp  = (dw >>> 26) & 1;   // B26
+    const dfpType  = (dw >>> 23) & 0x7; // B25:23
+    const connType = (dw >>> 21) & 0x3; // B22:21
+
+    const UFP_TYPE   = ['Undefined', 'PDUSB Hub', 'PDUSB Peripheral', 'PSD', 'Active Cable', 'Rsvd', 'VPD', 'Rsvd'];
+    const ufpName    = (ufpType === 3 && !usbHost && !usbDev) ? 'Passive Cable' : UFP_TYPE[ufpType];
+    const DFP_TYPE   = ['Undefined', 'PDUSB Hub', 'PDUSB Host', 'Power Brick', 'Rsvd', 'Rsvd', 'Rsvd', 'Rsvd'];
+    const CONN_NAMES = ['Rsvd(compat)', 'Rsvd', 'USB-C Recept.', 'USB-C Plug'];
+    const vidName    = VID_NAMES[vid];
+
+    out.push({ label: 'ID HEADER', raw: hex32(dw), section: true });
+    out.push({ label: 'VID',              value: `0x${vid.toString(16).toUpperCase().padStart(4,'0')}${vidName ? ` (${vidName})` : ''}` });
+    out.push({ label: 'USBHostCapable',   value: `${usbHost}` });
+    out.push({ label: 'USBDeviceCapable', value: `${usbDev}` });
+    out.push({ label: 'ProductTypeUFP',   value: `${bin3(ufpType)}b  ${ufpName}` });
+    out.push({ label: 'ModalOperation',   value: `${modalOp}` });
+    out.push({ label: 'ProductTypeDFP',   value: `${bin3(dfpType)}b  ${DFP_TYPE[dfpType]}` });
+    out.push({ label: 'ConnectorType',    value: `${bin2(connType)}b  ${CONN_NAMES[connType]}` });
   }
 
-  // ---- VDO[2] Cert Stat VDO (Table 6.42): XID in bits[19:0] ----
+  // ---- VDO[2] Cert Stat VDO (Table 6.38): B31:0 = XID ----
   if (vdos.length >= 2) {
-    const dw  = vdos[1];
-    const xid = dw & 0x000FFFFF;
-    out.push({
-      label: `Cert Stat VDO — XID=0x${xid.toString(16).toUpperCase()}`,
-      raw: hex32(dw),
-    });
+    const dw = vdos[1];
+    out.push({ label: 'CERT STAT', raw: hex32(dw), section: true });
+    out.push({ label: 'XID', value: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}` });
   }
 
-  // ---- VDO[3] Product VDO (Table 6.43) ----
+  // ---- VDO[3] Product VDO (Table 6.39: B31:16=PID, B15:0=bcdDevice) ----
   if (vdos.length >= 3) {
     const dw  = vdos[2];
     const pid = (dw >>> 16) & 0xFFFF;
     const bcd = dw & 0xFFFF;
-    out.push({
-      label: `Product VDO — PID=0x${pid.toString(16).toUpperCase().padStart(4,'0')} bcdDevice=0x${bcd.toString(16).toUpperCase().padStart(4,'0')}`,
-      raw: hex32(dw),
-    });
+    out.push({ label: 'PRODUCT', raw: hex32(dw), section: true });
+    out.push({ label: 'USBProductID', value: `0x${pid.toString(16).toUpperCase().padStart(4,'0')}` });
+    out.push({ label: 'bcdDevice',    value: `0x${bcd.toString(16).toUpperCase().padStart(4,'0')}` });
   }
 
-  // ---- VDO[4+] Product Type VDOs (Cable Plug or UFP/DFP) — raw for now ----
+  // ---- VDO[4+] Product Type VDOs ----
+  const isDrd        = vdos.length >= 6 && vdos[4] === 0;
+  const idHdrDw      = vdos.length >= 1 ? vdos[0] : 0;
+  const ufpPType     = (idHdrDw >>> 27) & 0x7;  // Table 6.35/6.36
+  const idHdrUsbHost = (idHdrDw >>> 31) & 1;
+  const idHdrUsbDev  = (idHdrDw >>> 30) & 1;
+
   for (let i = 3; i < vdos.length; i++) {
-    out.push({
-      label: `Product Type VDO[${i - 2}] — 0x${(vdos[i] >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-      raw: hex32(vdos[i]),
-    });
+    const dw = vdos[i];
+
+    // DRD Pad Object (all zeros)
+    if (isDrd && i === 4) {
+      out.push({ label: 'DRD PAD', raw: hex32(dw), section: true });
+      continue;
+    }
+
+    // UFP VDO (Table 6.40) — PDUSB Hub (1) or PDUSB Peripheral (2)
+    const isUfpSlot = (isDrd && i === 3) || (!isDrd && (ufpPType === 1 || ufpPType === 2) && i === 3);
+    if (isUfpSlot) {
+      const vdoVer   = (dw >>> 29) & 0x7;
+      const devCap   = (dw >>> 24) & 0xF;
+      const vconnPw  = (dw >>> 8)  & 0x7;
+      const vconnRq  = (dw >>> 7)  & 0x1;
+      const vbusRq   = (dw >>> 6)  & 0x1;
+      const altModes = (dw >>> 3)  & 0x7;
+      const usbSpd   = dw          & 0x7;
+
+      const VCONN_PW  = ['1W','1.5W','2W','3W','4W','5W','6W','Rsvd'];
+      const devCapStr = [
+        devCap & 1 ? 'USB2.0-Dev' : null, devCap & 2 ? 'USB2.0-Billboard' : null,
+        devCap & 4 ? 'USB3.2-Dev' : null, devCap & 8 ? 'USB4-Dev' : null,
+      ].filter(Boolean).join('+') || 'none';
+      const altStr = [
+        altModes & 1 ? 'TBT3' : null,
+        altModes & 2 ? 'AltMode(reconfig)' : null,
+        altModes & 4 ? 'AltMode(no-reconfig)' : null,
+      ].filter(Boolean).join('+') || 'none';
+
+      out.push({ label: 'UFP VDO', raw: hex32(dw), section: true });
+      out.push({ label: 'VDOVersion',      value: `1.${vdoVer}` });
+      out.push({ label: 'DeviceCapability', value: devCapStr });
+      out.push({ label: 'AlternateModes',  value: altStr });
+      out.push({ label: 'USBHighestSpeed', value: USB_SPD_NAMES[usbSpd] });
+      out.push({ label: 'VCONNRequired',   value: `${vconnRq}${vconnRq ? ` (${VCONN_PW[vconnPw]})` : ''}` });
+      out.push({ label: 'VBUSRequired',    value: vbusRq ? '1 (No)' : '0 (Yes)' });
+      continue;
+    }
+
+    // Passive Cable VDO (Table 6.42) — ufpPType=011b, no USB Host/Device capability
+    if (i === 3 && ufpPType === 3 && idHdrUsbHost === 0 && idHdrUsbDev === 0) {
+      const hwVer    = (dw >>> 28) & 0xF;
+      const fwVer    = (dw >>> 24) & 0xF;
+      const vdoVer   = (dw >>> 21) & 0x7;
+      const plugType = (dw >>> 18) & 0x3;
+      const eprCap   = (dw >>> 17) & 0x1;
+      const latency  = (dw >>> 13) & 0xF;
+      const termType = (dw >>> 11) & 0x3;
+      const maxVbus  = (dw >>> 9)  & 0x3;
+      const vbusCurr = (dw >>> 5)  & 0x3;
+      const usbSpd   = dw          & 0x7;
+
+      const LATENCY   = ['Rsvd','<10ns(~1m)','10-20ns(~2m)','20-30ns(~3m)',
+                         '30-40ns(~4m)','40-50ns(~5m)','50-60ns(~6m)','60-70ns(~7m)',
+                         '>70ns(>7m)','Rsvd','Rsvd','Rsvd','Rsvd','Rsvd','Rsvd','Rsvd'];
+      const TERM_TYPE = ['VCONN-not-req', 'VCONN-req', 'Rsvd', 'Rsvd'];
+      const VBUS_CURR = ['Rsvd', '3A', '5A', 'Rsvd'];
+
+      out.push({ label: 'PASSIVE CABLE VDO', raw: hex32(dw), section: true });
+      out.push({ label: 'HWVersion',       value: `0x${hwVer.toString(16).toUpperCase()}` });
+      out.push({ label: 'FWVersion',       value: `0x${fwVer.toString(16).toUpperCase()}` });
+      out.push({ label: 'VDOVersion',      value: `1.${vdoVer}` });
+      out.push({ label: 'PlugType',        value: `${bin2(plugType)}b  ${PLUG_TYPE_NAMES[plugType]}` });
+      out.push({ label: 'EPRModeCapable',  value: `${eprCap}` });
+      out.push({ label: 'CableLatency',    value: LATENCY[latency] });
+      out.push({ label: 'CableTermType',   value: TERM_TYPE[termType] });
+      out.push({ label: 'MaxVBUSVoltage',  value: MAX_VBUS_NAMES[maxVbus] });
+      out.push({ label: 'VBUSCurrent',     value: VBUS_CURR[vbusCurr] });
+      out.push({ label: 'USBHighestSpeed', value: USB_SPD_NAMES[usbSpd] });
+      continue;
+    }
+
+    // Active Cable VDO 1 & 2 (Table 6.43/6.44) — ufpPType=100b (4)
+    if (ufpPType === 4 && idHdrUsbHost === 0 && idHdrUsbDev === 0) {
+      if (i === 3) {
+        const hwVer    = (dw >>> 28) & 0xF;
+        const fwVer    = (dw >>> 24) & 0xF;
+        const vdoVer   = (dw >>> 21) & 0x7;
+        const plugType = (dw >>> 18) & 0x3;
+        const eprCap   = (dw >>> 17) & 0x1;
+        const latency  = (dw >>> 13) & 0xF;
+        const termType = (dw >>> 11) & 0x3;
+        const maxVbus  = (dw >>> 9)  & 0x3;
+        const sbuSupp  = (dw >>> 8)  & 0x1;
+        const sbuType  = (dw >>> 7)  & 0x1;
+        const vbusCurr = (dw >>> 5)  & 0x3;
+        const vbusThr  = (dw >>> 4)  & 0x1;
+        const sop2     = (dw >>> 3)  & 0x1;
+        const usbSpd   = dw          & 0x7;
+
+        const LATENCY_ACT   = ['Rsvd','<10ns(~1m)','10-20ns(~2m)','20-30ns(~3m)',
+                                '30-40ns(~4m)','40-50ns(~5m)','50-60ns(~6m)','60-70ns(~7m)',
+                                '1000ns(~100m)','2000ns(~200m)','3000ns(~300m)',
+                                'Rsvd','Rsvd','Rsvd','Rsvd','Rsvd'];
+        const TERM_TYPE_ACT = ['Rsvd','Rsvd','1Active+1Passive(VCONN-req)','Both-Active(VCONN-req)'];
+        const VBUS_CURR_ACT = ['Default', '3A', '5A', 'Rsvd'];
+
+        out.push({ label: 'ACTIVE CABLE VDO1', raw: hex32(dw), section: true });
+        out.push({ label: 'HWVersion',        value: `0x${hwVer.toString(16).toUpperCase()}` });
+        out.push({ label: 'FWVersion',        value: `0x${fwVer.toString(16).toUpperCase()}` });
+        out.push({ label: 'VDOVersion',       value: `1.${vdoVer}` });
+        out.push({ label: 'PlugType',         value: `${bin2(plugType)}b  ${PLUG_TYPE_NAMES[plugType]}` });
+        out.push({ label: 'EPRModeCapable',   value: `${eprCap}` });
+        out.push({ label: 'CableLatency',     value: LATENCY_ACT[latency] });
+        out.push({ label: 'CableTermType',    value: TERM_TYPE_ACT[termType] });
+        out.push({ label: 'MaxVBUSVoltage',   value: MAX_VBUS_NAMES[maxVbus] });
+        out.push({ label: 'SBUSupported',     value: sbuSupp ? '1 (No)' : '0 (Yes)' });
+        out.push({ label: 'SBUType',          value: sbuSupp ? 'N/A' : (sbuType ? '1 (Active)' : '0 (Passive)') });
+        out.push({ label: 'VBUSThroughCable', value: `${vbusThr}` });
+        if (vbusThr) out.push({ label: 'VBUSCurrent', value: VBUS_CURR_ACT[vbusCurr] });
+        out.push({ label: 'SOP2Controller',   value: `${sop2}` });
+        out.push({ label: 'USBHighestSpeed',  value: USB_SPD_NAMES[usbSpd] });
+        continue;
+      }
+      if (i === 4) {
+        const maxTemp  = (dw >>> 24) & 0xFF;
+        const shdnTemp = (dw >>> 16) & 0xFF;
+        const u3Pwr    = (dw >>> 12) & 0x7;
+        const u3Mode   = (dw >>> 11) & 0x1;
+        const physConn = (dw >>> 10) & 0x1;
+        const actElem  = (dw >>> 9)  & 0x1;
+        const usb4     = (dw >>> 8)  & 0x1;
+        const hubHops  = (dw >>> 6)  & 0x3;
+        const usb2     = (dw >>> 5)  & 0x1;
+        const usb32    = (dw >>> 4)  & 0x1;
+        const lanes    = (dw >>> 3)  & 0x1;
+        const optIso   = (dw >>> 2)  & 0x1;
+        const usb4Asym = (dw >>> 1)  & 0x1;
+        const usbGen   = dw          & 0x1;
+
+        const U3CLd_PWR = ['>10mW','5-10mW','1-5mW','0.5-1mW','0.2-0.5mW','50-200µW','<50µW','Rsvd'];
+
+        out.push({ label: 'ACTIVE CABLE VDO2', raw: hex32(dw), section: true });
+        out.push({ label: 'MaxOperatingTemp', value: `${maxTemp}°C` });
+        out.push({ label: 'ShutdownTemp',     value: `${shdnTemp}°C` });
+        out.push({ label: 'U3CLdPower',       value: U3CLd_PWR[u3Pwr] });
+        out.push({ label: 'U3toU0TransMode',  value: u3Mode ? 'via U3S' : 'direct' });
+        out.push({ label: 'PhysicalConn',     value: physConn ? 'Optical' : 'Copper' });
+        out.push({ label: 'ActiveElement',    value: actElem ? 'Retimer' : 'Redriver' });
+        out.push({ label: 'USB4Supported',    value: usb4 ? '1 (No)' : '0 (Yes)' });
+        out.push({ label: 'USB2HubHops',      value: `${hubHops}` });
+        out.push({ label: 'USB2Supported',    value: usb2 ? '1 (No)' : '0 (Yes)' });
+        out.push({ label: 'USB32Supported',   value: usb32 ? '1 (No)' : '0 (Yes)' });
+        out.push({ label: 'USBLanes',         value: lanes ? '1 (2-lane)' : '0 (1-lane)' });
+        out.push({ label: 'OpticallyIsolated',value: `${optIso}` });
+        out.push({ label: 'USB4AsymMode',     value: `${usb4Asym}` });
+        out.push({ label: 'USBGen',           value: usbGen ? '1 (Gen2+)' : '0 (Gen1)' });
+        continue;
+      }
+    }
+
+    // VPD VDO (Table 6.45) — ufpPType=110b (6)
+    if (i === 3 && ufpPType === 6 && idHdrUsbHost === 0 && idHdrUsbDev === 0) {
+      const hwVer   = (dw >>> 28) & 0xF;
+      const fwVer   = (dw >>> 24) & 0xF;
+      const vdoVer  = (dw >>> 21) & 0x7;
+      const maxVbus = (dw >>> 15) & 0x3;
+      const ctCurr  = (dw >>> 14) & 0x1;
+      const vbusImp = (dw >>> 7)  & 0x3F;
+      const gndImp  = (dw >>> 1)  & 0x3F;
+      const ctSupp  = dw          & 0x1;
+      const MAX_VBUS_VPD = ['20V', '20V(was30V⚠)', '20V(was40V⚠)', '20V(was50V⚠)'];
+
+      out.push({ label: 'VPD VDO', raw: hex32(dw), section: true });
+      out.push({ label: 'HWVersion',            value: `0x${hwVer.toString(16).toUpperCase()}` });
+      out.push({ label: 'FWVersion',            value: `0x${fwVer.toString(16).toUpperCase()}` });
+      out.push({ label: 'VDOVersion',           value: `1.${vdoVer}` });
+      out.push({ label: 'MaxVBUSVoltage',       value: MAX_VBUS_VPD[maxVbus] });
+      out.push({ label: 'ChargeThroughSupport', value: `${ctSupp}` });
+      if (ctSupp) {
+        out.push({ label: 'ChargeThroughCurrent', value: ctCurr ? '1 (5A)' : '0 (3A)' });
+        out.push({ label: 'VBUSImpedance',        value: `${vbusImp * 2}mΩ` });
+        out.push({ label: 'GndImpedance',         value: `${gndImp}mΩ` });
+      }
+      continue;
+    }
+
+    // DFP VDO (Table 6.41) — DRD slot i=5, or non-DRD DFP-only product
+    const dfpPType  = (idHdrDw >>> 23) & 0x7;
+    const isDfpSlot = (isDrd && i === 5) || (!isDrd && i === 3 && dfpPType >= 1 && dfpPType <= 3 && ufpPType === 0);
+    if (isDfpSlot) {
+      const vdoVer  = (dw >>> 29) & 0x7;
+      const hostCap = (dw >>> 24) & 0x7;
+      const portNum = dw          & 0x1F;
+      const hostCapStr = [
+        hostCap & 1 ? 'USB2.0' : null,
+        hostCap & 2 ? 'USB3.2' : null,
+        hostCap & 4 ? 'USB4'   : null,
+      ].filter(Boolean).join('+') || 'none';
+
+      out.push({ label: 'DFP VDO', raw: hex32(dw), section: true });
+      out.push({ label: 'VDOVersion',    value: `1.${vdoVer}` });
+      out.push({ label: 'HostCapability', value: hostCapStr });
+      out.push({ label: 'PortNumber',    value: `${portNum}` });
+      continue;
+    }
+
+    // Fallback — raw data
+    const ptLabel = isDrd
+      ? (i === 3 ? 'UFP' : i === 5 ? 'DFP' : `PType[${i - 2}]`)
+      : `PType[${i - 2}]`;
+    out.push({ label: ptLabel, raw: hex32(dw), section: true });
+    out.push({ label: 'Data', value: hex32(dw) });
   }
 
   return out;
@@ -806,15 +1040,24 @@ function decodeDiscoverIdentityVDOs(vdos) {
  * The last entry has 0x0000 in bytes[15:0] when list ends.
  */
 function decodeDiscoverSVIDsVDOs(vdos) {
+  // Table 6.46: each VDO contains SVID n (B31:16) and SVID n+1 (B15:0).
+  // Termination: odd count → B15:0=0x0000; even count → extra VDO with both 0x0000.
   const out = [];
-  for (const dw of vdos) {
+  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  for (let i = 0; i < vdos.length; i++) {
+    const dw = vdos[i];
     const s1 = (dw >>> 16) & 0xFFFF;
     const s2 = dw & 0xFFFF;
-    const pair = [s1, s2].filter((s) => s !== 0).map(fmtSvid).join(', ');
-    out.push({
-      label: `SVID Pair: ${pair || '(end)'}`,
-      raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-    });
+    let label;
+    if (s1 === 0x0000 && s2 === 0x0000) {
+      label = `SVID VDO[${i + 1}] — (end-of-list terminator)`;
+    } else if (s2 === 0x0000) {
+      // Odd-count: last SVID in B31:16, list-end in B15:0
+      label = `SVID VDO[${i + 1}] — ${fmtSvid(s1)}  0x0000(end)`;
+    } else {
+      label = `SVID VDO[${i + 1}] — ${fmtSvid(s1)}  ${fmtSvid(s2)}`;
+    }
+    out.push({ label, raw: hex32(dw) });
   }
   return out;
 }
@@ -960,10 +1203,12 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       const structured = (vdmHdr >>> 15) & 0x1;
 
       if (!structured) {
-        // Unstructured VDM — just show raw DOs
+        // Unstructured VDM (USB PD Rev 3.2 Table 6.29)
+        // B31:16 = VID, B15 = 0 (Unstructured), B14:0 = Vendor-defined data
+        const vendorData = vdmHdr & 0x7FFF;
         return [
           {
-            label: `VDM Header — SVID:${fmtSvid(svid)} Unstructured`,
+            label: `VDM Header — SVID:${fmtSvid(svid)} [Unstructured] VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`,
             raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
           },
           ...dataObjects.slice(1).map((dw, i) => ({
@@ -974,18 +1219,51 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       }
 
       // Structured VDM Header (USB PD Rev 3.2 Table 6.30)
-      // bit[15]=VDM Type, bits[14:13]=VDM Version, bits[7:6]=CmdType, bits[4:0]=Command
-      const cmdType  = (vdmHdr >>> 6) & 0x3;
-      const cmd      = vdmHdr & 0x1F;
-      const objPos   = (vdmHdr >>> 8) & 0x7;   // bits[10:8] Object Position (Enter/Exit/Attention)
+      // B15=VDM Type, B14:13=VDM Version Major, B12:11=VDM Version Minor,
+      // B10:8=Object Position, B7:6=CmdType, B5=Rsvd, B4:0=Command
+      const vdmVerMaj = (vdmHdr >>> 13) & 0x3;  // 01b = Version 2.x
+      const vdmVerMin = (vdmHdr >>> 11) & 0x3;  // 00b = 2.0, 01b = 2.1
+      const cmdType   = (vdmHdr >>> 6) & 0x3;
+      const cmd       = vdmHdr & 0x1F;
+      const objPos    = (vdmHdr >>> 8) & 0x7;   // bits[10:8]
 
-      const cmdName      = VDM_CMD_NAMES[cmd] ?? `CMD_0x${cmd.toString(16)}`;
-      const cmdTypeName  = VDM_CMD_TYPE[cmdType];
-      const objPosStr    = (objPos && (cmd === 0x04 || cmd === 0x05 || cmd === 0x06))
-        ? ` Obj#${objPos}` : '';
+      // VDM Version string (Major.Minor)
+      const verStr = vdmVerMaj === 0 ? 'v1.0(Deprecated)'
+                   : vdmVerMaj === 1 ? `v2.${vdmVerMin}`
+                   : `vRsvd(${vdmVerMaj}.${vdmVerMin})`;
+
+      // Command name — 0-15 standard, 16-31 SVID-specific
+      const cmdName     = cmd >= 0x10
+        ? `SVID_Cmd_0x${cmd.toString(16).toUpperCase()}`
+        : (VDM_CMD_NAMES[cmd] ?? `Rsvd_0x${cmd.toString(16)}`);
+      const cmdTypeName = VDM_CMD_TYPE[cmdType];
+
+      // Table 6.33: validate allowed responses per command (monitor only — annotate violations)
+      // Enter Mode (0x04): ACK, NAK only.  Exit Mode (0x05): ACK, NAK only.
+      // Attention (0x06): no response Shall be sent (REQ only).
+      let specViolation = '';
+      if ((cmd === 0x04 || cmd === 0x05) && cmdType === 3 /* BUSY */) {
+        specViolation = ' ⚠BUSY-not-allowed';
+      } else if (cmd === 0x06 && cmdType !== 0 /* not REQ */) {
+        specViolation = ' ⚠No-response-for-Attention';
+      }
+
+      // Object Position — used by Enter Mode (0x04), Exit Mode (0x05), Attention (0x06)
+      // §6.4.4.2.4: ObjPos=0x7 (ExitAll) is only defined for Exit Mode.
+      // For all other commands it Shall be set to zero when not required.
+      let objPosStr = '';
+      if (cmd === 0x04 || cmd === 0x05 || cmd === 0x06) {
+        if (cmd === 0x05 && objPos === 0x7) {
+          objPosStr = ' Obj=ExitAll';        // Exit Mode: 0x7 = exit all active modes
+        } else if (objPos > 0) {
+          objPosStr = ` Obj#${objPos}`;
+        } else {
+          objPosStr = ' Obj=Rsvd';           // 0 = reserved / not required
+        }
+      }
 
       const headerLabel =
-        `VDM Header — SVID:${fmtSvid(svid)} ${cmdName} [${cmdTypeName}]${objPosStr}`;
+        `VDM Header — SVID:${fmtSvid(svid)} ${cmdName} [${cmdTypeName}] ${verStr}${objPosStr}${specViolation}`;
 
       const vdos = dataObjects.slice(1);
 
@@ -995,11 +1273,27 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
         // Discover Identity ACK — standard VDO structure
         decodedVdos = decodeDiscoverIdentityVDOs(vdos);
       } else if (cmd === 0x02 && cmdType === 1) {
-        // Discover SVIDs ACK
-        decodedVdos = decodeDiscoverSVIDsVDOs(vdos);
+        // Discover SVIDs ACK — SVID SHALL be PD SID (0xFF00) (§6.4.4.3.2)
+        decodedVdos = [];
+        if (svid !== 0xFF00) {
+          decodedVdos.push({ label: `⚠ SVID SHALL be PD SID (0xFF00) — §6.4.4.3.2`, raw: '' });
+        }
+        decodedVdos.push(...decodeDiscoverSVIDsVDOs(vdos));
       } else if (cmd === 0x03 && cmdType === 1 && svid === 0xFF01) {
         // Discover Modes ACK for DisplayPort
         decodedVdos = decodeDPModeVDOs(vdos);
+      } else if (cmd === 0x03 && cmdType === 1) {
+        // Discover Modes ACK — generic (unknown SVID)
+        // §6.4.4.3.3: ACK SHALL contain 1+ Mode VDOs (NDO = 2..7)
+        decodedVdos = [];
+        if (vdos.length === 0) {
+          decodedVdos.push({ label: `⚠ Discover Modes ACK SHALL contain at least one Mode VDO — §6.4.4.3.3`, raw: '' });
+        } else {
+          decodedVdos.push(...vdos.map((dw, i) => ({
+            label: `Mode ${i + 1}: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })));
+        }
       } else if ((cmd === 0x04 || cmd === 0x06) && svid === 0xFF01 && vdos.length >= 1) {
         // Enter Mode ACK / Attention for DP — first VDO is DP Status VDO
         decodedVdos = [
@@ -1009,8 +1303,46 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
             raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
           })),
         ];
+      } else if (cmd === 0x03) {
+        // Discover Modes REQ / NAK / BUSY
+        // §6.4.4.3.3: REQ/NAK/BUSY SHALL NOT contain VDOs.
+        decodedVdos = [];
+        if (vdos.length > 0) {
+          decodedVdos.push({ label: `⚠ Discover Modes ${cmdTypeName} SHALL NOT contain VDOs — §6.4.4.3.3`, raw: '' });
+          decodedVdos.push(...vdos.map((dw, i) => ({
+            label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })));
+        }
+      } else if (cmd === 0x02) {
+        // Discover SVIDs REQ / NAK / BUSY
+        // §6.4.4.3.2: SVID SHALL be PD SID (0xFF00); REQ/NAK/BUSY SHALL NOT contain VDOs.
+        decodedVdos = [];
+        if (svid !== 0xFF00) {
+          decodedVdos.push({ label: `⚠ SVID SHALL be PD SID (0xFF00) — §6.4.4.3.2`, raw: '' });
+        }
+        if (vdos.length > 0) {
+          decodedVdos.push({ label: `⚠ Discover SVIDs ${cmdTypeName} SHALL NOT contain VDOs — §6.4.4.3.2`, raw: '' });
+          decodedVdos.push(...vdos.map((dw, i) => ({
+            label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })));
+        }
+      } else if (cmd === 0x01) {
+        // Discover Identity REQ / NAK / BUSY
+        // §6.4.4.3.1: SVID SHALL be PD SID (0xFF00); REQ/NAK/BUSY SHALL NOT contain VDOs.
+        decodedVdos = [];
+        if (svid !== 0xFF00) {
+          decodedVdos.push({ label: `⚠ SVID SHALL be PD SID (0xFF00) \u2014 §6.4.4.3.1`, raw: '' });
+        }
+        if (vdos.length > 0) {
+          decodedVdos.push({ label: `⚠ Discover Identity ${cmdTypeName} SHALL NOT contain VDOs \u2014 §6.4.4.3.1`, raw: '' });
+          decodedVdos.push(...vdos.map((dw, i) => ({
+            label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+          })));
+        }
       } else {
-        // REQ (no VDOs expected) or unknown — show raw
         decodedVdos = vdos.map((dw, i) => ({
           label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
           raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
@@ -1704,6 +2036,21 @@ export function parseCpdFile(buffer) {
         const presP  = (dw >>> 8)  & 0xFF;
         const repP   =  dw         & 0xFF;
         frame.pdoSummary = `${type}  Max:${maxP}W  Present:${presP}W  Reported:${repP}W`;
+      } else if (header.typeName === 'Vendor_Defined' && dataObjects.length) {
+        const vdmHdr     = dataObjects[0];
+        const svid       = (vdmHdr >>> 16) & 0xFFFF;
+        const structured = (vdmHdr >>> 15) & 0x1;
+        const svidStr    = fmtSvid(svid);
+        if (!structured) {
+          const vendorData = vdmHdr & 0x7FFF;
+          frame.pdoSummary = `${svidStr} [Unstructured] VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`;
+        } else {
+          const cmd         = vdmHdr & 0x1F;
+          const cmdType     = (vdmHdr >>> 6) & 0x3;
+          const cmdName     = VDM_CMD_NAMES[cmd] ?? `CMD_0x${cmd.toString(16)}`;
+          const cmdTypeName = VDM_CMD_TYPE[cmdType];
+          frame.pdoSummary  = `${svidStr}  ${cmdName} [${cmdTypeName}]`;
+        }
       } else if (header.extended && extendedHeader) {
         // Compact inline summary for Extended messages
         if (header.typeName === 'Source_Capabilities_Extended' && frame.parsedPayload?.length) {

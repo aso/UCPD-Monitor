@@ -1,11 +1,69 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 AsO
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './TopologyView.module.css';
 
-// ── PDO helpers ──────────────────────────────────────────────────
+// ── USB VID → Manufacturer lookup ────────────────────────────────
+// Sources: USB-IF VID list (usbids.github.io), known USB PD vendors
+const USB_VID_VENDORS = {
+  0x0000: 'Unknown',
+  0x0409: 'NEC',
+  0x045E: 'Microsoft',
+  0x046D: 'Logitech',
+  0x0483: 'STMicroelectronics',
+  0x04B4: 'Cypress',
+  0x04CC: 'Philips',
+  0x04D8: 'Microchip',
+  0x04E8: 'Samsung',
+  0x05AC: 'Apple',
+  0x0781: 'SanDisk',
+  0x03F0: 'HP',
+  0x0489: 'Foxconn',
+  0x0B05: 'ASUS',
+  0x0BDA: 'Realtek',
+  0x0BB4: 'HTC',
+  0x0D62: 'Acer',
+  0x1199: 'Sierra Wireless',
+  0x12D1: 'Huawei',
+  0x17EF: 'Lenovo',
+  0x18D1: 'Google',
+  0x1532: 'Razer',
+  0x1B1C: 'Corsair',
+  0x1D6B: 'Linux Foundation',
+  0x1F3A: 'AllWinner',
+  0x2001: 'D-Link',
+  0x2109: 'VIA Labs',
+  0x2357: 'TP-Link',
+  0x22D9: 'OPPO',
+  0x2537: 'Phison',
+  0x27C6: 'Goodix',
+  0x2717: 'Xiaomi',
+  0x2E04: 'Huawei',
+  0x3434: 'Keychron',
+  0x3438: 'ATEN',
+  0x348F: 'Luxshare',
+  0x413C: 'Dell',
+  0x5FC9: 'Parade Tech.',
+  0x7104: 'ZOTAC',
+  0x8086: 'Intel',
+  0x8087: 'Intel',
+  0xA2E6: 'Renesas',
+  // Shared / sub-licensed VIDs — PID is allocated per-vendor by the VID holder
+  0x1209: 'pid.codes',        // pid.codes open PID registry
+  0x16C0: 'V-USB Shared',     // Van Ooijen Tech. / V-USB shared VID (free & commercial)
+  0x16D0: 'MCS Electronics',  // MCS shared VID program
+  0x1D50: 'Openmoko',         // Openmoko open VID/PID registry
+  0x1FC9: 'NXP Semiconductors', // NXP sub-licensed PID program
+  0x2E8A: 'Raspberry Pi',     // Raspberry Pi USB VID
+  0xF055: 'f055.io',          // Unofficially self-assigned (f055.io)
+};
 
+function vidToVendor(vidStr) {
+  if (!vidStr) return null;
+  const n = parseInt(vidStr, 16);
+  return Number.isNaN(n) ? null : (USB_VID_VENDORS[n] ?? null);
+}
 const PDO_COLORS = {
   'Fixed':    '#80deea',
   'Battery':  '#ffcc80',
@@ -170,6 +228,18 @@ function buildSourceItems(source) {
     });
   }
 
+  if (source.scdb?.length) {
+    const sprPdp = source.scdb.find((s) => s.label === 'SPR PDP Rating')?.value ?? '';
+    const eprPdp = source.scdb.find((s) => s.label === 'EPR PDP Rating')?.value ?? '';
+    const summary = [sprPdp && `SPR:${sprPdp}`, eprPdp && `EPR:${eprPdp}`].filter(Boolean).join('  ');
+    items.push({
+      key: 'SCDB',
+      value: summary,
+      autoExpand: false,
+      children: source.scdb.map((s) => ({ key: s.label, value: s.value })),
+    });
+  }
+
   return items;
 }
 
@@ -257,6 +327,18 @@ function buildSinkItems(sink) {
     });
   }
 
+  if (sink.skedb?.length) {
+    const maxPdp    = sink.skedb.find((s) => s.label === 'Sink Maximum PDP')?.value ?? '';
+    const eprMaxPdp = sink.skedb.find((s) => s.label === 'EPR Sink Maximum PDP')?.value ?? '';
+    const summary   = [maxPdp && `MaxPDP:${maxPdp}`, eprMaxPdp && `EPR:${eprMaxPdp}`].filter(Boolean).join('  ');
+    items.push({
+      key: 'SKEDB',
+      value: summary,
+      autoExpand: false,
+      children: sink.skedb.map((s) => ({ key: s.label, value: s.value })),
+    });
+  }
+
   return items;
 }
 
@@ -335,9 +417,9 @@ function PropNode({ item, depth }) {
   );
 }
 
-function PropPanel({ title, items }) {
+function PropPanel({ title, items, width }) {
   return (
-    <div className={styles.sidePanel}>
+    <div className={styles.sidePanel} style={width != null ? { width } : undefined}>
       <div className={styles.panelTitle}>{title}</div>
       {items.map((item, i) => <PropNode key={i} item={item} depth={0} />)}
     </div>
@@ -572,9 +654,91 @@ function RdoPanel({ rdo }) {
   );
 }
 
+// ── Source spec badge ───────────────────────────────────────────
+
+/** Compact spec badge shown at the top of the SOURCE node box */
+function SrcSpecBadge({ source }) {
+  const scdb = source.scdb;
+  // Cap_Extended: only when Source_Capabilities_Extended was actually received
+  const extMsgCap = !!scdb?.length;
+  if (!scdb?.length && !source.eprActive && !extMsgCap && !source.vdmSeen) return null;
+
+  const scdbVal  = (label) => scdb?.find((s) => s.label === label)?.value ?? null;
+  const vidStr   = scdbVal('VID');
+  const vendor   = vidToVendor(vidStr);
+  const pid      = scdbVal('PID');
+  const eprPdp   = scdbVal('EPR PDP Rating');
+  const sprPdp   = scdbVal('SPR PDP Rating');
+  const eprCap   = eprPdp && parseInt(eprPdp) > 0;
+  const displayPdp = eprCap ? eprPdp : sprPdp;
+
+  return (
+    <div className={styles.sinkSpecBadge}>
+      <div className={styles.sinkSpecVendor}>
+        {vendor
+          ? <><span className={styles.sinkSpecVendorName}>{vendor}</span>{pid && <span className={styles.sinkSpecPid}>{pid}</span>}</>
+          : vidStr ? <span className={styles.sinkSpecPid}>{vidStr}</span> : <span className={styles.sinkSpecPid}>DFP</span>}
+      </div>
+      <div className={styles.sinkSpecRow}>
+        {(eprCap || source.eprActive) && <span className={styles.sinkSpecEpr}>EPR RDY</span>}
+        {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {source.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
+        {displayPdp && <span className={styles.sinkSpecPdp}>{displayPdp}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** SOURCE node content: spec badge + cap list */
+function SourceContent({ source }) {
+  return (
+    <div>
+      <SrcSpecBadge source={source} />
+      <CapList caps={source.capabilities} selectedObjPos={source.contract?.objPos ?? null} />
+    </div>
+  );
+}
+
 // ── Sink two-column layout ──────────────────────────────────────
 //  Left col : SNK PDO caps
 //  Right col : RDO panel + SRC PDO caps (SRC only when advertised)
+
+/** Compact spec badge shown at the top of the SINK node box */
+function SinkSpecBadge({ sink }) {
+  const skedb = sink.skedb;
+  // Cap_Extended support: unchunkedExt bit in lastRequest RDO
+  const extMsgCap = sink.lastRequest?.unchunkedExt === true;
+  if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen) return null;
+
+  const skedbVal = (label) => skedb?.find((s) => s.label === label)?.value ?? null;
+  const vidStr   = skedbVal('VID');
+  const vendor   = vidToVendor(vidStr);
+  const pid      = skedbVal('PID');
+  const maxPdp   = skedbVal('Sink Maximum PDP');
+  const eprMaxPdp = skedbVal('EPR Sink Maximum PDP');
+  const eprCap   = eprMaxPdp && parseInt(eprMaxPdp) > 0;
+  const displayPdp = eprCap ? eprMaxPdp : maxPdp;
+
+  return (
+    <div className={styles.sinkSpecBadge}>
+      <div className={styles.sinkSpecVendor}>
+        {vendor
+          ? <><span className={styles.sinkSpecVendorName}>{vendor}</span>{pid && <span className={styles.sinkSpecPid}>{pid}</span>}</>
+          : vidStr ? <span className={styles.sinkSpecPid}>{vidStr}</span> : <span className={styles.sinkSpecPid}>UFP</span>}
+      </div>
+      <div className={styles.sinkSpecRow}>
+        {(eprCap || sink.eprActive) && (
+          <span className={styles.sinkSpecEpr}>EPR RDY</span>
+        )}
+        {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {sink.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
+        {displayPdp && (
+          <span className={styles.sinkSpecPdp}>{displayPdp}</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function SinkContent({ sink }) {
   const hasSnkCaps = sink.capabilities.length > 0;
@@ -584,20 +748,25 @@ function SinkContent({ sink }) {
   // RDO (+ SRC CAP) is always on the Source-side (left), SNK CAP on the far side (right)
   return (
     <div className={styles.sinkColumns}>
-      {hasRight && (
-        <div className={styles.sinkColRdo}>
-          {hasRdo && <RdoPanel rdo={sink.lastRequest} />}
-          {hasSrcCaps && (
-            <div style={{ marginTop: hasRdo ? 4 : 0 }}>
-              <div className={styles.sinkColLabel}>SRC CAP</div>
-              <CapList caps={sink.srcCaps} selectedObjPos={null} />
+      <SinkSpecBadge sink={sink} />
+      {(hasRight || hasSnkCaps) && (
+        <div className={styles.sinkColumnsInner}>
+          {hasRight && (
+            <div className={styles.sinkColRdo}>
+              {hasRdo && <RdoPanel rdo={sink.lastRequest} />}
+              {hasSrcCaps && (
+                <div style={{ marginTop: hasRdo ? 4 : 0 }}>
+                  <div className={styles.sinkColLabel}>SRC CAP</div>
+                  <CapList caps={sink.srcCaps} selectedObjPos={null} />
+                </div>
+              )}
             </div>
           )}
-        </div>
-      )}
-      {hasSnkCaps && (
-        <div className={styles.sinkColSnk}>
-          <CapList caps={sink.capabilities} selectedObjPos={null} isSink={true} />
+          {hasSnkCaps && (
+            <div className={styles.sinkColSnk}>
+              <CapList caps={sink.capabilities} selectedObjPos={null} isSink={true} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -731,6 +900,45 @@ export default function TopologyView() {
 
   const handleRefresh = useCallback(() => replayFrames(messages), [replayFrames, messages]);
 
+  // ── Resizable panes ──────────────────────────────────────────
+  const wrapperRef  = useRef(null);
+  const [topoHeight, setTopoHeight] = useState(null);  // null = auto
+  const [srcPanelW,  setSrcPanelW]  = useState(200);
+  const [snkPanelW,  setSnkPanelW]  = useState(260);
+
+  /** Start a drag-resize. setter receives (startSize + sign * delta). */
+  const startDrag = useCallback((e, startSize, setter, axis, sign, min) => {
+    e.preventDefault();
+    const coord0 = axis === 'x' ? e.clientX : e.clientY;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = axis === 'x' ? 'ew-resize' : 'ns-resize';
+    const onMove = (mv) => {
+      const delta = (axis === 'x' ? mv.clientX : mv.clientY) - coord0;
+      setter(Math.max(min, startSize + sign * delta));
+    };
+    const onUp = () => {
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  const onHeightDragStart = useCallback((e) => {
+    const h = wrapperRef.current?.getBoundingClientRect().height ?? 300;
+    startDrag(e, h, setTopoHeight, 'y', +1, 140);
+  }, [startDrag]);
+
+  const onSrcResize = useCallback((e) => {
+    startDrag(e, srcPanelW, setSrcPanelW, 'x', +1, 120);
+  }, [startDrag, srcPanelW]);
+
+  const onSnkResize = useCallback((e) => {
+    startDrag(e, snkPanelW, setSnkPanelW, 'x', -1, 120);
+  }, [startDrag, snkPanelW]);
+
   const srcState = nodeState(source.connected, source.eprActive, !!source.contract);
   const snkState = nodeState(sink.connected,   sink.eprActive,   !!source.contract);
 
@@ -752,31 +960,27 @@ export default function TopologyView() {
   // ── Cap lists for SOURCE and SINK node boxes ────────────────
   const srcCapList = useMemo(() => {
     if (!source.connected || !source.capabilities.length) return null;
-    return (
-      <CapList
-        caps={source.capabilities}
-        selectedObjPos={source.contract?.objPos ?? null}
-      />
-    );
-  }, [source.connected, source.capabilities, source.contract?.objPos]);
+    return <SourceContent source={source} />;
+  }, [source]);
 
   const snkCapList = useMemo(() => {
     if (!sink.connected) return null;
     if (!sink.capabilities.length && !sink.lastRequest) return null;
     return <SinkContent sink={sink} />;
-  }, [sink.connected, sink.capabilities, sink.lastRequest, sink.srcCaps]);
+  }, [sink]);
 
   const snkNarrow = sink.connected && !sink.capabilities.length && !!sink.lastRequest;
   const contractState = source.eprActive ? 'epr' : source.contract ? 'contract' : source.connected ? 'active' : 'inactive';
 
   return (
-    <section className={styles.wrapper}>
+    <section ref={wrapperRef} className={styles.wrapper} style={topoHeight != null ? { height: topoHeight } : undefined}>
       <header className={styles.header}>
         <span>Connection View</span>
         <button onClick={handleRefresh} className={styles.resetBtn}>Refresh</button>
       </header>
-      <div className={styles.body}>
-        <PropPanel title="Source" items={srcItems} />
+      <div className={styles.body} style={topoHeight != null ? { flex: '1 1 0', minHeight: 0 } : undefined}>
+        <PropPanel title="Source" items={srcItems} width={srcPanelW} />
+        <div className={styles.panelSep} onMouseDown={onSrcResize} />
 
         <div className={styles.center}>
           <div className={styles.chain}>
@@ -786,8 +990,10 @@ export default function TopologyView() {
           </div>
         </div>
 
-        <PropPanel title="Sink" items={snkItems} />
+        <div className={styles.panelSep} onMouseDown={onSnkResize} />
+        <PropPanel title="Sink" items={snkItems} width={snkPanelW} />
       </div>
+      <div className={styles.heightResizeBar} onMouseDown={onHeightDragStart} />
     </section>
   );
 }

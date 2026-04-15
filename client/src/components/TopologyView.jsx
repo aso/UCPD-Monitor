@@ -706,8 +706,8 @@ function SourceContent({ source }) {
 /** Compact spec badge shown at the top of the SINK node box */
 function SinkSpecBadge({ sink }) {
   const skedb = sink.skedb;
-  // Cap_Extended support: unchunkedExt bit in lastRequest RDO
-  const extMsgCap = sink.lastRequest?.unchunkedExt === true;
+  // Cap_Extended: only when Sink_Capabilities_Extended was actually received
+  const extMsgCap = !!(skedb?.length);
   if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen) return null;
 
   const skedbVal = (label) => skedb?.find((s) => s.label === label)?.value ?? null;

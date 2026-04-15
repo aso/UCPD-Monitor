@@ -8,9 +8,9 @@ import { decodePDO, decodeRDO } from '../parsers/pd_parser';
  */
 
 // ── Topology initial shapes ──────────────────────────────────────
-const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], snkCaps: [], contract: null, status: null, scdb: null, vdmSeen: false };
+const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, drd: false, altMode: false, capabilities: [], snkCaps: [], contract: null, status: null, scdb: null, vdmSeen: false };
 const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
-const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
+const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, drd: false, altMode: false, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
 
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
@@ -85,6 +85,7 @@ function applyFrameToTopo(topo, frame) {
 
     } else if (typeName === 'Source_Capabilities' && isSrcDir) {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i));
+      const drd  = !!(caps[0]?.dualRoleData);
       if (next.prSwapPending) {
         // PR Swap completed: old sink is now the new source
         const prevSrc = { ...next.source };
@@ -93,6 +94,7 @@ function applyFrameToTopo(topo, frame) {
           connected:    true,
           pdRevision:   header.specRevision,
           eprActive:    false,
+          drd,
           capabilities: caps,
           snkCaps:      prevSnk.capabilities,
           contract:     null,
@@ -104,6 +106,7 @@ function applyFrameToTopo(topo, frame) {
           connected:    true,
           pdRevision:   prevSrc.pdRevision,
           eprActive:    false,
+          drd:          prevSrc.drd,
           capabilities: prevSrc.snkCaps,
           srcCaps:      prevSrc.capabilities,
           lastRequest:  null,
@@ -114,18 +117,19 @@ function applyFrameToTopo(topo, frame) {
         next.prSwapPending = false;
       } else {
         // Normal: source advertising caps
-        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, capabilities: caps };
+        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, capabilities: caps };
         next.sink   = { ...next.sink,   connected: true };
       }
 
     } else if (typeName === 'Sink_Capabilities') {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i, true));
+      const drd  = !!(caps[0]?.dualRoleData);
       if (isSrcDir) {
         // Source advertising its own sink capabilities (PR_Swap capable device)
-        next.source = { ...next.source, connected: true, snkCaps: caps };
+        next.source = { ...next.source, connected: true, snkCaps: caps, drd };
         next.sink   = { ...next.sink,   connected: true };
       } else {
-        next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, capabilities: caps };
+        next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, drd, capabilities: caps };
         next.source = { ...next.source, connected: true };
       }
 
@@ -190,6 +194,7 @@ function applyFrameToTopo(topo, frame) {
       const vdmHdr     = dataObjects[0];
       const structured = (vdmHdr >>> 15) & 0x1;
       const cmdType    = (vdmHdr >>> 6) & 0x3;
+      const cmd        = vdmHdr & 0x1F;
       const hasVdos    = dataObjects.length > 1;
       if (structured && cmdType === 1 /* ACK */ && hasVdos) {
         // Once set, vdmSeen stays true (only Hard Reset / PR Swap clears it)
@@ -197,6 +202,15 @@ function applyFrameToTopo(topo, frame) {
           next.source = { ...next.source, vdmSeen: true };
         else if (isSnkDir && !next.sink.vdmSeen)
           next.sink   = { ...next.sink,   vdmSeen: true };
+        // Discover Identity ACK (cmd=0x01): check ModalOperation bit in ID Header VDO
+        if (cmd === 0x01) {
+          const idHdr    = dataObjects[1];
+          const altMode  = !!((idHdr >>> 26) & 0x1);
+          if (isSrcDir)
+            next.source = { ...next.source, altMode };
+          else if (isSnkDir)
+            next.sink   = { ...next.sink,   altMode };
+        }
       }
 
     } else if (typeName === 'Revision' && dataObjects?.length) {

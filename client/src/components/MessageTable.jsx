@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 AsO
-import { useMemo, useState, useCallback, useEffect, useRef, memo } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef, memo, Fragment } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from '../store/appStore';
 import { decodeDataObjects, decodePDO, buildRdoSummary } from '../parsers/pd_parser';
@@ -109,7 +109,7 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
 }
 
 /** Render a single PDO child row */
-function PdoRow({ child, isParentSelected }) {
+function PdoRow({ child, isParentSelected, expanded, onToggle, indented }) {
   const typeColor = PDO_TYPE_COLORS[child.pdoType] ?? '#aaa';
   const details = [];
 
@@ -176,10 +176,50 @@ function PdoRow({ child, isParentSelected }) {
       <tr className={`${styles.childRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
         <td />
         <td colSpan={2} className={styles.childIndex}>
-          <span className={styles.treeL}>└</span>
+          <span className={indented ? styles.treeLIndented : styles.treeL}>└</span>
           <span className={styles.fieldLabel}>{child.label}</span>
         </td>
         <td colSpan={6} className={styles.childLabel}>{child.value}</td>
+      </tr>
+    );
+  }
+
+  // VDM-style generic row: { label, raw } — returned by decodeDataObjects for Vendor_Defined.
+  // Detected by absence of type-specific properties (pdoType, rdoType, opCurrent_mA, action, value).
+  const isVdoRow = !isEprMode
+                 && child.pdoType === undefined && child.rdoType === undefined
+                 && child.opCurrent_mA === undefined && child.value === undefined
+                 && child.label !== undefined;
+  if (isVdoRow) {
+    const isWarning = child.label.startsWith('⚠');
+    if (child.section) {
+      // Section header (ID HEADER, CERT STAT, PRODUCT, …) — clickable when onToggle provided
+      return (
+        <tr
+          className={`${styles.childRow} ${isParentSelected ? styles.childRowSelected : ''} ${onToggle ? styles.vdoSectionClickable : ''}`}
+          onClick={onToggle}
+        >
+          <td />
+          <td colSpan={2} className={styles.childIndex}>
+            {onToggle
+              ? <span className={styles.sectionExpander}>{expanded ? '▾' : '▸'}</span>
+              : <span className={styles.treeL}>├</span>}
+          </td>
+          <td colSpan={5} className={styles.vdoSection}>{child.label}</td>
+          <td colSpan={1} className={styles.childRaw}>{child.raw}</td>
+        </tr>
+      );
+    }
+    return (
+      <tr className={`${styles.childRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
+        <td />
+        <td colSpan={2} className={styles.childIndex}>
+          <span className={styles.treeL}>└</span>
+        </td>
+        <td colSpan={5} className={styles.childLabel} style={isWarning ? { color: '#ffb74d' } : undefined}>
+          {child.label}
+        </td>
+        <td colSpan={1} className={styles.childRaw}>{child.raw}</td>
       </tr>
     );
   }
@@ -241,6 +281,30 @@ const MessageRow = memo(function MessageRow({
     return decodeDataObjects(header.typeName, msg.dataObjects, resolvedSourcePdo.pdo.pdoType);
   }, [isRequest, header, msg.dataObjects, resolvedSourcePdo, children]);
 
+  // Group VDM Discover Identity children into sections for 2-level tree.
+  // Each section: { hdr: { label, raw, section:true }, fields: [{ label, value }, ...] }
+  const vdmGroups = useMemo(() => {
+    const ch = childrenTyped ?? children;
+    if (!ch?.some(c => c.section)) return null;
+    const groups = [];
+    let cur = null;
+    for (const c of ch) {
+      if (c.section) { cur = { hdr: c, fields: [] }; groups.push(cur); }
+      else if (cur)  { cur.fields.push(c); }
+    }
+    return groups;
+  }, [children, childrenTyped]);
+
+  // Per-section expansion state (local — resets on virtual-scroll unmount, which is acceptable)
+  const [openSections, setOpenSections] = useState(new Set());
+  const toggleSection = useCallback((gi) => {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      next.has(gi) ? next.delete(gi) : next.add(gi);
+      return next;
+    });
+  }, []);
+
   const dirInfo  = DIR_LABELS[cpd?.dirName] ?? { color: '#aaa', label: cpd?.dirName ?? '—' };
   const sopColor = SOP_QUAL_COLORS[cpd?.sopQualName] ?? '#aaa';
   const isDebug  = recordType === 'ASCII_LOG';
@@ -284,7 +348,7 @@ const MessageRow = memo(function MessageRow({
           {isDebug ? 'ASCII_LOG' : isEvent ? (msg.eventName ?? 'EVENT') : header?.typeName ?? '—'}
         </td>
         <td>{header?.numDataObjects ?? ''}</td>
-        <td className={isDebug ? styles.ascii : (msg.pdoSummary && !showRaw) ? styles.pdoSummary : styles.raw}>
+        <td className={isDebug ? styles.ascii : ((msg.pdoSummary || (header?.typeName === 'Vendor_Defined' && children?.[0]?.label)) && !showRaw) ? styles.pdoSummary : styles.raw}>
           {(msg.pdoSummary && !showRaw)
             ? <>
                 <span className={styles.pdoSummaryText}>
@@ -299,12 +363,26 @@ const MessageRow = memo(function MessageRow({
                 )}
                 {msg.eprCapable && <span className={styles.eprBadge}>EPR</span>}
               </>
-            : (msg.raw ? `DATA:${msg.raw}` : '')}
+            : (header?.typeName === 'Vendor_Defined' && children?.[0]?.label && !showRaw)
+              ? <span className={styles.pdoSummaryText}>{children[0].label}</span>
+              : (msg.raw ? `DATA:${msg.raw}` : '')}
         </td>
       </tr>
-      {expanded && hasChildren && (childrenTyped ?? children).map((child, i) => (
-        <PdoRow key={i} child={child} isParentSelected={isSelected} />
-      ))}
+      {expanded && hasChildren && (
+        vdmGroups
+          ? vdmGroups.map((grp, gi) => (
+              <Fragment key={gi}>
+                <PdoRow child={grp.hdr} isParentSelected={isSelected}
+                        expanded={openSections.has(gi)} onToggle={() => toggleSection(gi)} />
+                {openSections.has(gi) && grp.fields.map((f, fi) => (
+                  <PdoRow key={fi} child={f} isParentSelected={isSelected} indented />
+                ))}
+              </Fragment>
+            ))
+          : (childrenTyped ?? children).map((child, i) => (
+              <PdoRow key={i} child={child} isParentSelected={isSelected} />
+            ))
+      )}
       {expanded && resolvedSourcePdo && (
         <ResolvedPdoRow pdo={resolvedSourcePdo.pdo} objPos={resolvedSourcePdo.objPos} isParentSelected={isSelected} />
       )}

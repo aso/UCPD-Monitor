@@ -8,9 +8,9 @@ import { decodePDO, decodeRDO } from '../parsers/pd_parser';
  */
 
 // ── Topology initial shapes ──────────────────────────────────────
-const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], snkCaps: [], contract: null, status: null };
+const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, capabilities: [], snkCaps: [], contract: null, status: null, scdb: null, vdmSeen: false };
 const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
-const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], srcCaps: [], lastRequest: null, status: null };
+const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
 
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
@@ -93,19 +93,23 @@ function applyFrameToTopo(topo, frame) {
           connected:    true,
           pdRevision:   header.specRevision,
           eprActive:    false,
-          capabilities: caps,                      // new SRC_CAPA from new source
-          snkCaps:      prevSnk.capabilities,      // new source inherits old sink's SNK caps
+          capabilities: caps,
+          snkCaps:      prevSnk.capabilities,
           contract:     null,
           status:       null,
+          scdb:         null,
+          vdmSeen:      false,
         };
         next.sink = {
           connected:    true,
           pdRevision:   prevSrc.pdRevision,
           eprActive:    false,
-          capabilities: prevSrc.snkCaps,           // new sink's SNK caps (were source's snkCaps)
-          srcCaps:      prevSrc.capabilities,      // new sink remembers old SRC caps
+          capabilities: prevSrc.snkCaps,
+          srcCaps:      prevSrc.capabilities,
           lastRequest:  null,
           status:       null,
+          skedb:        null,
+          vdmSeen:      false,
         };
         next.prSwapPending = false;
       } else {
@@ -170,6 +174,30 @@ function applyFrameToTopo(topo, frame) {
       // Extended Status message — store decoded payload for topology display
       if (isSrcDir) next.source = { ...next.source, status: parsedPayload };
       else if (isSnkDir) next.sink = { ...next.sink, status: parsedPayload };
+
+    } else if (typeName === 'Source_Capabilities_Extended' && isSrcDir && parsedPayload) {
+      // SCDB — store for DFP/Source panel display
+      next.source = { ...next.source, scdb: parsedPayload };
+
+    } else if (typeName === 'Sink_Capabilities_Extended' && isSnkDir && parsedPayload) {
+      // SKEDB — store for UFP/Sink panel display
+      next.sink = { ...next.sink, skedb: parsedPayload };
+
+    } else if (typeName === 'Vendor_Defined' && isSOP && dataObjects?.length) {
+      // VDM badge: only set for the device that responded with ACK + actual VDOs.
+      // Structured VDM ACK (cmdType===1) with VDOs beyond the header = real capability info.
+      // NAK/BUSY/REQ and Unstructured VDMs do not qualify.
+      const vdmHdr     = dataObjects[0];
+      const structured = (vdmHdr >>> 15) & 0x1;
+      const cmdType    = (vdmHdr >>> 6) & 0x3;
+      const hasVdos    = dataObjects.length > 1;
+      if (structured && cmdType === 1 /* ACK */ && hasVdos) {
+        // Once set, vdmSeen stays true (only Hard Reset / PR Swap clears it)
+        if (isSrcDir && !next.source.vdmSeen)
+          next.source = { ...next.source, vdmSeen: true };
+        else if (isSnkDir && !next.sink.vdmSeen)
+          next.sink   = { ...next.sink,   vdmSeen: true };
+      }
 
     } else if (typeName === 'Revision' && dataObjects?.length) {
       // Table 6.53 — Revision message: update sender's PD revision

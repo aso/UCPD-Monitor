@@ -1,6 +1,6 @@
 {
   "name": "usb-pd-monitor",
-  "version": "3.2.1",
+  "version": "3.2.2",
   "description": "STM32 UCPD Monitor — USB-PD CC Line Monitoring desktop app.",
   "main": "electron/main.js",
   "scripts": {

@@ -4,6 +4,30 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.2] - 2026-04-15
+
+### Added
+
+#### Spec Badge — DRD バッジ (`TopologyView.jsx`)
+- `Source_Capabilities` / `Sink_Capabilities` PDO#1 B25 (`dualRoleData`) が `1` の機器ボックスに紫色の `DRD` バッジを表示。
+- `appStore.js`: `INIT_SOURCE` / `INIT_SINK` に `drd: false` フィールドを追加。PR Swap ハンドラでも正しく引き継ぐ。
+
+#### Spec Badge — Alt Mode バッジ (`TopologyView.jsx`)
+- `SOP` フレームの Discover Identity ACK (cmd=`0x01`) 受信時、ID Header VDO B26 (`ModalOperation`) が `1` の機器ボックスにオレンジ色の `Alt Mode` バッジを表示。
+- `appStore.js`: `INIT_SOURCE` / `INIT_SINK` に `altMode: false` フィールドを追加。
+
+#### Discover SVIDs / Modes — 2段階ツリー表示 (`pd_parser.js`, `MessageTable.jsx`)
+- Discover SVIDs ACK: VDO ワードごとに `SVID VDO[N]` セクションヘッダー + `SVID[upper]` / `SVID[lower]` フィールド行の2段階ツリーに移行。
+- Discover Modes ACK (DP SVID=0xFF01): `Mode 1: DP Capabilities VDO` セクションヘッダー + UFP_D/DFP_D/Receptacle/Signaling フィールド行の2段階ツリーに移行。
+- Discover Modes ACK (汎用 SVID): `Mode N` セクションヘッダー + `Raw` フィールド行の2段階ツリーに移行。
+- `vdmGroups` がセクション前の `⚠ Spec violation` 警告行を hdr=null グループとして保持し、全幅行で描画。
+
+### Fixed
+
+- **Sink `Cap_Ext` バッジ誤点灯**: RDO の `unchunkedExt` ビットで判定していた → 実際に `Sink_Capabilities_Extended` (SKEDB) を受信したときのみ点灯するよう修正。
+
+---
+
 ## [3.2.1] - 2026-04-15
 
 ### Added

@@ -1,7 +1,7 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 1.3  
-更新日: 2026-04-14
+バージョン: 1.4  
+更新日: 2026-04-15
 
 ---
 
@@ -18,6 +18,9 @@
 | USB PD メッセージ解析 | USB PD Rev 3.2 準拠のフルデコード (SPR/EPR/PPS/AVS/SPR-AVS) |
 | Connection View | Source / Cable (eMarker) / Sink の接続状態と契約情報を可視化。Source PDO は I.max/P.max、Sink PDO は I.op/P.op を表示 |
 | メッセージテーブル | 時系列メッセージリスト。仮想スクロール対応 (1000行超でも高速)。列幅ユーザリサイズ可。ツリー展開・ウィンドウリサイズで最終列が安定して右端まで表示 |
+| Dir / Role 統合カラム | 方向 (SRC→SNK / SNK→SRC) と電力・データロール (Source/DFP 等) を 1 列に集約 |
+| 拡張メッセージデコード | Source_Capabilities_Extended (SCEDB 25 バイト)・Status (SDB 7 バイト) を構造化キー・バリュー行でツリー展開。EPR_Source/Sink_Capabilities も PDO ツリー展開対応 |
+| EPR_Mode カラーバッジ | Enter / Acknowledged / Succeeded / Failed / Exit の各アクションを色分け表示 |
 | 行選択・クリップボードコピー | クリック/Shift+クリック範囲選択。Ctrl+C または右クリックで TSV コピー |
 | セッション保存 | ライブデータを自動的にタイムスタンプ付き `.cpd` ファイルへ保存。アプリ終了時にシリアルポート自動切断・ファイルフラッシュ |
 | 不明パケットログ | パース不能フレームを `logs/unknown_packets.yaml` へ記録 |
@@ -159,7 +162,7 @@ GoodCRC, GotoMin, Accept, Reject, Ping, PS_RDY, Get_Source_Cap, Get_Sink_Cap, DR
 
 **データメッセージ**
 
-| メッセージ | NDO | 説明 |
+| メッセージ | #DO | 説明 |
 |---|---|---|
 | Source_Capabilities | 1–8 | ソース PDO 一覧 (Fixed/Variable/Battery/APDO_PPS/APDO_AVS) |
 | Request / EPR_Request | 1 | シンクからの RDO (Fixed/PPS/AVS レイアウト対応) |
@@ -279,7 +282,7 @@ USB-PD 接続状態を Connection View として可視化。
 
 **カラム構成:**
 
-| # | Timestamp | Dir | SOP | Rev | MsgID | Type | #DO | Parsed/Summary |
+| # | Timestamp | Dir / Role | SOP | Rev | MsgID | Type | #DO | Parsed/Summary |
 |---|---|---|---|---|---|---|---|---|
 
 **機能:**
@@ -300,6 +303,8 @@ USB-PD 接続状態を Connection View として可視化。
   - パース済サマリがない場合、本文カラムは `DATA:HEX...` 形式で表示
 - **スクロール**: ユーザーが手動スクロールすると自動スクロール停止。フローティング「最新へ」ボタンで再開
 - **HEX ⇄ Parsed トグル**: 本文カラムをパース済テキスト/生 HEX で切替
+- **拡張メッセージツリー**: `parsedPayload` システムにより、Source_Capabilities_Extended (SCEDB) と Status (SDB) はキー・バリュー行としてツリー展開。EPR_Source/Sink_Capabilities は通常 PDO ツリーと同様に展開
+- **EPR_Mode アクションバッジ**: Enter=緑、Acknowledged=水色、Succeeded=青、Failed=赤、Exit=グレー で色分け
 
 **メッセージ種別の色分け:**
 
@@ -307,7 +312,7 @@ USB-PD 接続状態を Connection View として可視化。
 |---|---|
 | Control メッセージ | 青系 |
 | Data メッセージ | 緑系 |
-| Extended メッセージ | 紫系 |
+| Extended メッセージ | 橙系 (amber) |
 | ASCII_LOG | グレー |
 | EVENT (ATTACHED/DETACHED) | オレンジ |
 

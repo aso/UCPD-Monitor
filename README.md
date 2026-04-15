@@ -4,17 +4,15 @@
 
 A cross-platform Electron desktop application for real-time monitoring and analysis of USB Power Delivery (PD) communication captured by STM32 UCPD hardware.
 
-It decodes `.cpd` binary streams produced by STM32CubeMonitor-UCPD, providing a live Connection View, a fully-decoded message table, and clipboard-ready export — all without requiring the original STM32CubeMonitor-UCPD software.
+It reads `.cpd` binary streams produced by STM32CubeMonitor-UCPD and decodes them against the **USB PD Revision 3.2, Version 1.0 (2023-10)** specification — providing a live Connection View, a fully-decoded message table, and clipboard-ready export.
 
 ---
 
 ## Background
 
-The **STM32G071B-DISCO** board from STMicroelectronics includes a USB Power Delivery protocol analyser with a **SPY mode** that passively monitors the CC line. When connected to the PC application **STM32CubeMonitor-UCPD** via USB-UART, it captures live PD packets.
+The **STM32G071B-DISCO** board from STMicroelectronics includes a UCPD SPY mode that passively captures USB PD packets on the CC line and streams them to a host PC via USB-UART as `.cpd` binary data, using the companion tool **STM32CubeMonitor-UCPD** (USB PD 2.0/3.0). UCPD-Monitor accepts the same `.cpd` stream and decodes it using a parser built from scratch against **USB PD Rev 3.2** — covering EPR, AVS, extended messages, and Source_Info — without requiring STM32CubeMonitor-UCPD.
 
-However, STM32CubeMonitor-UCPD v1.4 only supports **PD 2.0 / PD 3.0**, and cannot correctly decode messages introduced in **USB PD Rev 3.2** — including EPR (Extended Power Range), AVS (Adjustable Voltage Supply), and new extended message types. Development of the application has since been discontinued.
-
-This project was created to fill that gap. It accepts the same `.cpd` binary stream that STM32CubeMonitor-UCPD produces and decodes it using a fully **USB PD Rev 3.2 compliant** parser built from scratch.
+> **Reference:** [STM32CubeMonitor-UCPD on st.com](https://www.st.com/en/development-tools/stm32cubemonucpd.html) · [RN0113 Release Note](https://www.st.com/resource/en/release_note/rn0113-stm32cubemonitorucpd-release-140-stmicroelectronics.pdf)
 
 ![Main screen](docs/main-screen.png)
 
@@ -90,61 +88,6 @@ Each row is copied as a tab-separated line:
 ```
 
 Rows without a parsed summary show the raw payload as `DATA:HEXRAW` directly in the summary column.
-
----
-
-## `.cpd` Binary Format
-
-Each record in a `.cpd` stream has the following layout:
-
-```
-Offset  Size  Field
-------  ----  -------------------------------------------
-00-03    4    SOF:        FD FD FD FD (always)
-04       1    Tag:        ((PortNum+1) << 5) | 0x12
-                          Port 0 → 0x32 / Port 1 → 0x52
-05-06    2    Length:     BE uint16 = PayloadLen + 9
-07       1    Type:       0x07=SRC→SNK / 0x08=SNK→SRC
-                          0x06=ASCII_LOG / 0x03=EVENT
-08-0B    4    Timestamp:  LE uint32 (milliseconds since boot)
-0C       1    PortNum:    0x00=Port 0 / 0x01=Port 1
-0D       1    SopQual:    0x00=SOP / 0x01=SOP' / 0x02=SOP''
-0E-0F    2    Size:       BE uint16 = PayloadLen
-10+      N    Payload:    USB-PD message bytes or ASCII string
-10+N+    4    EOF:        A5 A5 A5 A5
-```
-
-Total frame length: **20 + PayloadLen** bytes.
-
----
-
-## Project Structure
-
-```
-/
-├── electron/
-│   └── main.js               # Electron main process
-├── server/
-│   ├── index.js              # Express + WebSocket + SerialPort server
-│   └── cpdStreamParser.js    # Transform stream — CPD frame de-multiplexer
-├── client/
-│   └── src/
-│       ├── App.jsx            # Root component
-│       ├── store/appStore.js  # Zustand global store + connection state machine
-│       ├── hooks/
-│       │   ├── useWebSocket.js
-│       │   └── useCpdImport.js
-│       ├── parsers/pd_parser.js  # USB PD Rev 3.2 decoder
-│       └── components/
-│           ├── TopologyView.jsx
-│           ├── MessageTable.jsx
-│           ├── Console.jsx
-│           └── SerialBar.jsx
-├── logs/                      # Session .cpd files + unknown_packets.yaml
-├── docs/
-│   └── SPEC.md               # Detailed specification (Japanese)
-└── package.json
-```
 
 ---
 

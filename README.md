@@ -22,9 +22,9 @@ The **STM32G071B-DISCO** board from STMicroelectronics includes a UCPD SPY mode 
 
 - **Live Serial Monitoring** — Connect to any STM32 UCPD device via USB-UART and receive PD frames in real time
 - **`.cpd` File Import** — Drag-and-drop or open `.cpd` binary files captured by STM32CubeMonitor-UCPD; server-side parsing eliminates ring-buffer mismatches. The current Live log is automatically cleared before import and import data is never duplicated into the session file.
-- **USB PD Rev 3.2 Decoder** — Full decode of Control, Data, and Extended messages including EPR, PPS, AVS, and SPR-AVS
-- **Connection View** — Visual topology of Source / Cable (eMarker) / Sink. SOURCE node shows confirmed output voltage and current/power after PS_RDY. SINK node shows **V.req** (requested voltage) and calculated power. PDO grids display `I.max` / `P.max` for Source PDOs and `I.op` / `P.op` for Sink PDOs, matching USB PD Rev 3.2 semantics.
-- **Message Table** — High-performance virtual scroll ([@tanstack/react-virtual](https://tanstack.com/virtual)) handles 1 000 + rows smoothly. Expandable PDO/RDO child rows with O(n) RDO-to-source-PDO resolution. Column widths are user-resizable; the rightmost "Parsed" column auto-fills the remaining window width and is stable across tree-expand and window resize.
+- **USB PD Rev 3.2 Decoder** — Full decode of Control, Data, and Extended messages including EPR, PPS, AVS, and SPR-AVS. Structured VDM (Discover Identity / SVIDs / Modes) fully decoded per §6.4.4.3 with per-field binary notation and vendor name lookup (Lenovo, Google, Apple, STMicro, Intel …).
+- **Connection View** — Visual topology of Source / Cable (eMarker) / Sink. SOURCE node shows confirmed output voltage and current/power after PS_RDY. SINK node shows **V.req** (requested voltage) and calculated power. PDO grids display `I.max` / `P.max` for Source PDOs and `I.op` / `P.op` for Sink PDOs, matching USB PD Rev 3.2 semantics. **Spec badges** (SrcSpecBadge / SinkSpecBadge) display vendor name, PID, EPR RDY, Cap_Ext, VDM, and PDP — Cap_Ext lights only when the corresponding Extended Capabilities message is actually received.
+- **Message Table** — High-performance virtual scroll ([@tanstack/react-virtual](https://tanstack.com/virtual)) handles 1 000 + rows smoothly. Expandable PDO/RDO child rows with O(n) RDO-to-source-PDO resolution. **VDM 2-level collapsible tree**: Discover Identity section headers (ID HEADER, CERT STAT, PRODUCT, UFP VDO …) are individually expandable with ▸ / ▾ toggles. Column widths are user-resizable; the rightmost "Parsed" column auto-fills the remaining window width and is stable across tree-expand and window resize.
 - **Row Selection & Clipboard Copy** — Click / Shift-click range selection; Ctrl+C or right-click to copy rows as TSV (with `DATA:HEX` raw suffix)
 - **Auto-scroll with Jump-to-Latest** — Automatic scroll to newest message; floats a button to return after manual browsing
 - **Session File Save** — Live frames are automatically written to a timestamped `.cpd` file for later replay. The serial port is cleanly disconnected and the session file flushed on application quit.
@@ -97,7 +97,7 @@ Rows without a parsed summary show the raw payload as `DATA:HEXRAW` directly in 
 GoodCRC, Accept, Reject, PS_RDY, Soft_Reset, Hard_Reset, DR_Swap, PR_Swap, VCONN_Swap, Wait, Not_Supported, Get_Source_Cap, Get_Sink_Cap, Get_Source_Cap_Extended, Get_Status, FR_Swap, Get_PPS_Status, Data_Reset, and EPR control messages.
 
 ### Data Messages
-Source_Capabilities, Sink_Capabilities, Request, EPR_Request, BIST, Alert, Battery_Status, Get_Country_Info, Enter_USB, EPR_Mode, Source_Info, Revision, VDM (Structured).
+Source_Capabilities, Sink_Capabilities, Request, EPR_Request, BIST, Alert, Battery_Status, Get_Country_Info, Enter_USB, EPR_Mode, Source_Info, Revision, VDM (Structured — Discover Identity / SVIDs / Modes with full per-field decode per PD Rev 3.2 §6.4.4.3, Tables 6.34 / 6.38–6.45).
 
 ### Extended Messages
 Source_Capabilities_Extended (SCEDB), Status, PPS_Status, Battery_Capabilities, Manufacturer_Info, Sink_Capabilities_Extended, Country_Info, Country_Codes, Security_*, Firmware_Update_*, Extended_Control.

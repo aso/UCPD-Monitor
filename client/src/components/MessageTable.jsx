@@ -281,8 +281,9 @@ const MessageRow = memo(function MessageRow({
     return decodeDataObjects(header.typeName, msg.dataObjects, resolvedSourcePdo.pdo.pdoType);
   }, [isRequest, header, msg.dataObjects, resolvedSourcePdo, children]);
 
-  // Group VDM Discover Identity children into sections for 2-level tree.
+  // Group VDM Discover Identity / SVIDs / Modes children into sections for 2-level tree.
   // Each section: { hdr: { label, raw, section:true }, fields: [{ label, value }, ...] }
+  // Pre-section rows (e.g. ⚠ spec-violation warnings) are kept as a header-less group.
   const vdmGroups = useMemo(() => {
     const ch = childrenTyped ?? children;
     if (!ch?.some(c => c.section)) return null;
@@ -291,6 +292,7 @@ const MessageRow = memo(function MessageRow({
     for (const c of ch) {
       if (c.section) { cur = { hdr: c, fields: [] }; groups.push(cur); }
       else if (cur)  { cur.fields.push(c); }
+      else           { groups.push({ hdr: null, fields: [c] }); } // pre-section flat row
     }
     return groups;
   }, [children, childrenTyped]);
@@ -372,11 +374,18 @@ const MessageRow = memo(function MessageRow({
         vdmGroups
           ? vdmGroups.map((grp, gi) => (
               <Fragment key={gi}>
-                <PdoRow child={grp.hdr} isParentSelected={isSelected}
-                        expanded={openSections.has(gi)} onToggle={() => toggleSection(gi)} />
-                {openSections.has(gi) && grp.fields.map((f, fi) => (
-                  <PdoRow key={fi} child={f} isParentSelected={isSelected} indented />
-                ))}
+                {grp.hdr
+                  ? <>
+                      <PdoRow child={grp.hdr} isParentSelected={isSelected}
+                              expanded={openSections.has(gi)} onToggle={() => toggleSection(gi)} />
+                      {openSections.has(gi) && grp.fields.map((f, fi) => (
+                        <PdoRow key={fi} child={f} isParentSelected={isSelected} indented />
+                      ))}
+                    </>
+                  : grp.fields.map((f, fi) => (
+                      <PdoRow key={fi} child={f} isParentSelected={isSelected} />
+                    ))
+                }
               </Fragment>
             ))
           : (childrenTyped ?? children).map((child, i) => (

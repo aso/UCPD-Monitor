@@ -1042,22 +1042,32 @@ function decodeDiscoverIdentityVDOs(vdos) {
 function decodeDiscoverSVIDsVDOs(vdos) {
   // Table 6.46: each VDO contains SVID n (B31:16) and SVID n+1 (B15:0).
   // Termination: odd count → B15:0=0x0000; even count → extra VDO with both 0x0000.
+  // Output uses the same section/field structure as decodeDiscoverIdentityVDOs:
+  //   { label, raw, section: true }  — collapsible section header per VDO word
+  //   { label, value }               — field rows inside each section
   const out = [];
   const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  const hex16 = (v) => `0x${(v & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
   for (let i = 0; i < vdos.length; i++) {
     const dw = vdos[i];
     const s1 = (dw >>> 16) & 0xFFFF;
     const s2 = dw & 0xFFFF;
-    let label;
-    if (s1 === 0x0000 && s2 === 0x0000) {
-      label = `SVID VDO[${i + 1}] — (end-of-list terminator)`;
-    } else if (s2 === 0x0000) {
-      // Odd-count: last SVID in B31:16, list-end in B15:0
-      label = `SVID VDO[${i + 1}] — ${fmtSvid(s1)}  0x0000(end)`;
+    const isTerminator = s1 === 0x0000 && s2 === 0x0000;
+    const isOddEnd     = !isTerminator && s2 === 0x0000;
+
+    // Section header
+    out.push({ label: `SVID VDO[${i + 1}]`, raw: hex32(dw), section: true });
+
+    if (isTerminator) {
+      out.push({ label: 'SVID[upper]', value: '0x0000  (end-of-list)' });
+      out.push({ label: 'SVID[lower]', value: '0x0000  (end-of-list)' });
+    } else if (isOddEnd) {
+      out.push({ label: 'SVID[upper]', value: `${hex16(s1)}  ${fmtSvid(s1)}` });
+      out.push({ label: 'SVID[lower]', value: '0x0000  (end-of-list)' });
     } else {
-      label = `SVID VDO[${i + 1}] — ${fmtSvid(s1)}  ${fmtSvid(s2)}`;
+      out.push({ label: 'SVID[upper]', value: `${hex16(s1)}  ${fmtSvid(s1)}` });
+      out.push({ label: 'SVID[lower]', value: `${hex16(s2)}  ${fmtSvid(s2)}` });
     }
-    out.push({ label, raw: hex32(dw) });
   }
   return out;
 }
@@ -1065,28 +1075,30 @@ function decodeDiscoverSVIDsVDOs(vdos) {
 /**
  * Decode Discover Modes ACK VDOs for DisplayPort Alt Mode (SVID=0xFF01).
  * USB PD Rev 3.2 §B.1 – DP Capabilities VDO.
+ * Returns section/field structure compatible with 2-level tree.
  */
 function decodeDPModeVDOs(vdos) {
   const out = [];
+  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
   for (let i = 0; i < vdos.length; i++) {
     const dw = vdos[i];
     if (i === 0) {
-      // DP Capabilities VDO
-      const ufpD     = (dw >>> 0) & 0xF;  // bits[3:0]  UFP_D capable (Pin Assignments)
-      const dfpD     = (dw >>> 8) & 0xF;  // bits[11:8] DFP_D capable
-      const recep    = (dw >>> 6) & 0x1;  // bit[6]     Receptacle indication
-      const usb20    = (dw >>> 7) & 0x1;  // bit[7]     USB 2.0 signaling
-      const sig      = (dw >>> 16) & 0xF; // bits[19:16] DP Signaling
-      const sigNames = { 0: 'DP', 1: 'Gen2', 2: 'Reserved', 8: 'Gen3' };
-      out.push({
-        label: `DP Capabilities VDO — UFP_D=0x${ufpD.toString(16).toUpperCase()} DFP_D=0x${dfpD.toString(16).toUpperCase()} Sig=${sigNames[sig] ?? sig}${recep ? ' Receptacle' : ' Plug'}${usb20 ? ' USB2.0' : ''}`,
-        raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-      });
+      // DP Capabilities VDO (Table B-1)
+      const ufpD     = (dw >>> 0) & 0xF;
+      const dfpD     = (dw >>> 8) & 0xF;
+      const recep    = (dw >>> 6) & 0x1;
+      const usb20    = (dw >>> 7) & 0x1;
+      const sig      = (dw >>> 16) & 0xF;
+      const sigNames = { 0: 'DP Gen1', 1: 'Gen2', 2: 'Reserved', 8: 'Gen3' };
+      out.push({ label: `Mode ${i + 1}: DP Capabilities VDO`, raw: hex32(dw), section: true });
+      out.push({ label: 'UFP_D PinAssign', value: `0x${ufpD.toString(16).toUpperCase()}` });
+      out.push({ label: 'DFP_D PinAssign', value: `0x${dfpD.toString(16).toUpperCase()}` });
+      out.push({ label: 'Receptacle',      value: recep ? '1  Receptacle' : '0  Plug' });
+      out.push({ label: 'USB2.0 Signal',   value: String(usb20) });
+      out.push({ label: 'DP Signaling',    value: `${sig}  ${sigNames[sig] ?? 'Reserved'}` });
     } else {
-      out.push({
-        label: `Mode VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-        raw: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-      });
+      out.push({ label: `Mode ${i + 1}`, raw: hex32(dw), section: true });
+      out.push({ label: 'Raw', value: hex32(dw) });
     }
   }
   return out;
@@ -1289,10 +1301,11 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
         if (vdos.length === 0) {
           decodedVdos.push({ label: `⚠ Discover Modes ACK SHALL contain at least one Mode VDO — §6.4.4.3.3`, raw: '' });
         } else {
-          decodedVdos.push(...vdos.map((dw, i) => ({
-            label: `Mode ${i + 1}: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-            raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
-          })));
+          const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+          vdos.forEach((dw, i) => {
+            decodedVdos.push({ label: `Mode ${i + 1}`, raw: hex32(dw), section: true });
+            decodedVdos.push({ label: 'Raw', value: hex32(dw) });
+          });
         }
       } else if ((cmd === 0x04 || cmd === 0x06) && svid === 0xFF01 && vdos.length >= 1) {
         // Enter Mode ACK / Attention for DP — first VDO is DP Status VDO

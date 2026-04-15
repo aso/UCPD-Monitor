@@ -1,6 +1,6 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 1.4  
+バージョン: 1.6  
 更新日: 2026-04-15
 
 ---
@@ -175,7 +175,7 @@ GoodCRC, GotoMin, Accept, Reject, Ping, PS_RDY, Get_Source_Cap, Get_Sink_Cap, DR
 | EPR_Mode | 1 | EPR モード制御 (Enter/Enter ACK/Succeeded/Failed/Exit) |
 | Source_Info | 1 | ソース情報 (SIDO: Port Type, Max/Present/Reported PDP) |
 | Revision | 1 | PD リビジョン (B31..24=Revision BCD, B15..8=Version BCD) |
-| VDM | 1–7 | Vendor Defined Message (Structured: Discover Identity/SVIDs/Modes, DP Status) |
+| VDM | 1–7 | Vendor Defined Message (Structured: Discover Identity/SVIDs/Modes, DP Status など) |
 
 **拡張メッセージ**
 
@@ -196,6 +196,45 @@ PDO デコードは `isSink` フラグを保持し、Source/Sink どちらの能
 
 > **Connection View での表示ラベル**:  
 > Source PDO グリッドでは電流・電力フィールドを **I.max / P.max** と表示し、Sink PDO グリッドでは USB PD Rev 3.2 Table 6-12 に準拠して **I.op / P.op** と表示する。ラベル切り替えは `isSink` prop を受け取った `CapList` コンポーネント内の `GRID_COLS_SRC` / `GRID_COLS_SNK` 定数で行う。
+
+### VDM デコード (Structured VDM — USB PD Rev 3.2 §6.4.4.3)
+
+#### VDM ヘッダー (§6.4.4.2)
+
+| フィールド | ビット | デコード内容 |
+|---|---|---|
+| SVID | B31:16 | 4桁 HEX + 既知 SVID 名 (FF00h=SID, FF01h=DP, …) |
+| VDM Type | B15 | 0=Unstructured / 1=Structured |
+| VDM Version Major/Minor | B14:13 / B12:11 | `v2.0` 形式 |
+| Object Position | B22:20 | ExitAll(0) / Obj#N / Rsvd |
+| Command Type | B7:6 | REQ / ACK / NAK / BUSY |
+| Command | B4:0 | Discover Identity/SVIDs/Modes / Enter/Exit Mode / Attention / SVID_Cmd_0xNN |
+
+#### Discover Identity VDO (§6.4.4.3.1)
+
+全 VDO を PD Rev 3.2 仕様 Table 番号に準拠してフィールド単位でデコード:
+
+| VDO | Table | デコード内容 |
+|---|---|---|
+| ID Header VDO | 6.34 | VID (ベンダー名付き), USBHostCapable, USBDeviceCapable, ProductTypeUFP/DFP, ModalOperation, ConnectorType |
+| Cert Stat VDO | 6.38 | TID 32bit 全ビット |
+| Product VDO | 6.39 | bcdDevice, PID |
+| UFP VDO | 6.40 | UFPVDOVersion, DeviceCapability, AlternateModes, USBSpeed |
+| DFP VDO | 6.41 | DFPVDOVersion, HostCapability, AlternateModes, USBSpeed |
+| Passive Cable VDO | 6.42 | CableVDOVersion, MaxVBusCurrent, MaxVBusVoltage, CableHousingType 他 |
+| Active Cable VDO1 | 6.43 | CableVDOVersion, MaxVBusCurrent, SBUType, SBUImpedance, SSRx/SSTx 他 |
+| Active Cable VDO2 | 6.44 | USB4PHY, USB3Support, USB2Support, USB2BidirectionalPower 他 |
+| VPD VDO | 6.45 | VPDVDOVersion, MaxVBusCurrent, ChargeThroughSupport, GroundImpedance 他 |
+
+- enum フィールドは `010b  PDUSB Peripheral` 形式 (2進表記 + 記述名) で表示。
+- VID に対して Lenovo / Google / Apple / STMicro / Intel / HP / TI 等のベンダー名を自動付与。
+
+#### Discover SVIDs / Modes (§6.4.4.3.2–3.3)
+
+- Discover SVIDs ACK: VDO ワードごとに `SVID VDO[N]` セクションヘッダー + `SVID[upper]` / `SVID[lower]` フィールド行の2段階ツリー表示。end-of-list / odd-count 終端を明示。
+- Discover Modes ACK (DP SVID=0xFF01): `Mode 1: DP Capabilities VDO` セクションヘッダー + UFP_D PinAssign / DFP_D PinAssign / Receptacle / USB2.0 Signal / DP Signaling フィールド行。
+- Discover Modes ACK (汎用 SVID): `Mode N` セクションヘッダー + `Raw` フィールド行。
+- REQ / NAK / BUSY に VDO が含まれる場合に `⚠ Spec violation` を付与 (警告行はセクション前の全幅行として表示)。
 
 ### RDO 解析
 
@@ -271,6 +310,10 @@ USB-PD 接続状態を Connection View として可視化。
     - Fixed: srcPdo.vMv × opCurrent_mA → W 換算
     - PPS/AVS: opVoltage_mV × opCurrent_mA → W 換算
     - Battery: opPower_mW をそのまま W 表示
+  - **SinkSpecBadge** (ノードボックス上部): ベンダー名 / PID / EPR RDY / Cap_Ext / DRD / Alt Mode / VDM / PDP を表示。  
+    Cap_Ext バッジは `sink.skedb`（Sink_Capabilities_Extended の実受信）が存在する場合のみ点灯。RDO の `unchunkedExt` ビットとは独立。  
+    DRD バッジは `Sink_Capabilities` PDO#1 B25 (`dualRoleData`) が `1` の場合に点灯。  
+    Alt Mode バッジは Discover Identity ACK の ID Header VDO B26 (`ModalOperation`) が `1` の場合に点灯。
 - **VBUS / CC ピン**: ASCII_LOG から抽出
   - **Source PDO グリッド列**: V.max / V.min / **I.max** / **P.max**
   - **Sink PDO グリッド列**: V.max / V.min / **I.op** / **P.op** (USB PD Rev 3.2 Table 6 に準拠したラベル)
@@ -304,6 +347,7 @@ USB-PD 接続状態を Connection View として可視化。
 - **スクロール**: ユーザーが手動スクロールすると自動スクロール停止。フローティング「最新へ」ボタンで再開
 - **HEX ⇄ Parsed トグル**: 本文カラムをパース済テキスト/生 HEX で切替
 - **拡張メッセージツリー**: `parsedPayload` システムにより、Source_Capabilities_Extended (SCEDB) と Status (SDB) はキー・バリュー行としてツリー展開。EPR_Source/Sink_Capabilities は通常 PDO ツリーと同様に展開
+- **VDM 2段階ツリー展開**: Discover Identity ACK 展開時、VDO ごとのセクションヘッダー (`ID HEADER`, `CERT STAT`, `PRODUCT`, `UFP VDO` …) を折り畳み行として表示。▸ / ▾ エキスパンダーをクリックして各セクションのフィールド行を個別に開閉可能。展開フィールド行はセクションより 24px インデントした `└` 記号付きで表示
 - **EPR_Mode アクションバッジ**: Enter=緑、Acknowledged=水色、Succeeded=青、Failed=赤、Exit=グレー で色分け
 
 **メッセージ種別の色分け:**
@@ -361,6 +405,8 @@ Zustand により以下の状態を管理:
 | Revision | 送信元の pdRevision を BCD デコード値で更新 |
 | Status (拡張) | source/sink.status (StatusDB フィールド一覧) 更新 |
 | SOP'/SOP'' VDM | eMarker 情報 (ケーブル定格等) 更新 |
+| Sink_Cap_Extended (SKEDB) | sink.skedb フィールド一覧更新 → SinkSpecBadge Cap_Ext バッジ点灯 |
+| Discover Identity ACK (SOP) | 送信元の altMode フラグ更新 (ID Header VDO B26 ModalOperation) → Alt Mode バッジ点灯 |
 
 ---
 

@@ -661,7 +661,7 @@ function SrcSpecBadge({ source }) {
   const scdb = source.scdb;
   // Cap_Extended: only when Source_Capabilities_Extended was actually received
   const extMsgCap = !!scdb?.length;
-  if (!scdb?.length && !source.eprActive && !extMsgCap && !source.vdmSeen) return null;
+  if (!scdb?.length && !source.eprActive && !extMsgCap && !source.vdmSeen && !source.drd && !source.altMode) return null;
 
   const scdbVal  = (label) => scdb?.find((s) => s.label === label)?.value ?? null;
   const vidStr   = scdbVal('VID');
@@ -682,6 +682,8 @@ function SrcSpecBadge({ source }) {
       <div className={styles.sinkSpecRow}>
         {(eprCap || source.eprActive) && <span className={styles.sinkSpecEpr}>EPR RDY</span>}
         {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {source.drd && <span className={styles.sinkSpecDrd}>DRD</span>}
+        {source.altMode && <span className={styles.sinkSpecAlt}>Alt Mode</span>}
         {source.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
         {displayPdp && <span className={styles.sinkSpecPdp}>{displayPdp}</span>}
       </div>
@@ -708,7 +710,7 @@ function SinkSpecBadge({ sink }) {
   const skedb = sink.skedb;
   // Cap_Extended: only when Sink_Capabilities_Extended was actually received
   const extMsgCap = !!(skedb?.length);
-  if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen) return null;
+  if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen && !sink.drd && !sink.altMode) return null;
 
   const skedbVal = (label) => skedb?.find((s) => s.label === label)?.value ?? null;
   const vidStr   = skedbVal('VID');
@@ -731,6 +733,8 @@ function SinkSpecBadge({ sink }) {
           <span className={styles.sinkSpecEpr}>EPR RDY</span>
         )}
         {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {sink.drd && <span className={styles.sinkSpecDrd}>DRD</span>}
+        {sink.altMode && <span className={styles.sinkSpecAlt}>Alt Mode</span>}
         {sink.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
         {displayPdp && (
           <span className={styles.sinkSpecPdp}>{displayPdp}</span>

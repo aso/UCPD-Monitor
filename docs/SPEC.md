@@ -1,6 +1,6 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 1.5  
+バージョン: 1.6  
 更新日: 2026-04-15
 
 ---
@@ -231,9 +231,10 @@ PDO デコードは `isSink` フラグを保持し、Source/Sink どちらの能
 
 #### Discover SVIDs / Modes (§6.4.4.3.2–3.3)
 
-- Discover SVIDs ACK: `SVID VDO[N] — <name1>  <name2>` 形式 + end-of-list 明示表示。
-- Discover Modes ACK: `Mode 1: 0x...` 形式で汎用デコード。
-- REQ / NAK / BUSY に VDO が含まれる場合に `⚠ Spec violation` を付与。
+- Discover SVIDs ACK: VDO ワードごとに `SVID VDO[N]` セクションヘッダー + `SVID[upper]` / `SVID[lower]` フィールド行の2段階ツリー表示。end-of-list / odd-count 終端を明示。
+- Discover Modes ACK (DP SVID=0xFF01): `Mode 1: DP Capabilities VDO` セクションヘッダー + UFP_D PinAssign / DFP_D PinAssign / Receptacle / USB2.0 Signal / DP Signaling フィールド行。
+- Discover Modes ACK (汎用 SVID): `Mode N` セクションヘッダー + `Raw` フィールド行。
+- REQ / NAK / BUSY に VDO が含まれる場合に `⚠ Spec violation` を付与 (警告行はセクション前の全幅行として表示)。
 
 ### RDO 解析
 
@@ -309,8 +310,10 @@ USB-PD 接続状態を Connection View として可視化。
     - Fixed: srcPdo.vMv × opCurrent_mA → W 換算
     - PPS/AVS: opVoltage_mV × opCurrent_mA → W 換算
     - Battery: opPower_mW をそのまま W 表示
-  - **SinkSpecBadge** (ノードボックス上部): ベンダー名 / PID / EPR RDY / Cap_Ext / VDM / PDP を表示。  
-    Cap_Ext バッジは `sink.skedb`（Sink_Capabilities_Extended の実受信）が存在する場合のみ点灯。RDO の `unchunkedExt` ビットとは独立。
+  - **SinkSpecBadge** (ノードボックス上部): ベンダー名 / PID / EPR RDY / Cap_Ext / DRD / Alt Mode / VDM / PDP を表示。  
+    Cap_Ext バッジは `sink.skedb`（Sink_Capabilities_Extended の実受信）が存在する場合のみ点灯。RDO の `unchunkedExt` ビットとは独立。  
+    DRD バッジは `Sink_Capabilities` PDO#1 B25 (`dualRoleData`) が `1` の場合に点灯。  
+    Alt Mode バッジは Discover Identity ACK の ID Header VDO B26 (`ModalOperation`) が `1` の場合に点灯。
 - **VBUS / CC ピン**: ASCII_LOG から抽出
   - **Source PDO グリッド列**: V.max / V.min / **I.max** / **P.max**
   - **Sink PDO グリッド列**: V.max / V.min / **I.op** / **P.op** (USB PD Rev 3.2 Table 6 に準拠したラベル)
@@ -403,6 +406,7 @@ Zustand により以下の状態を管理:
 | Status (拡張) | source/sink.status (StatusDB フィールド一覧) 更新 |
 | SOP'/SOP'' VDM | eMarker 情報 (ケーブル定格等) 更新 |
 | Sink_Cap_Extended (SKEDB) | sink.skedb フィールド一覧更新 → SinkSpecBadge Cap_Ext バッジ点灯 |
+| Discover Identity ACK (SOP) | 送信元の altMode フラグ更新 (ID Header VDO B26 ModalOperation) → Alt Mode バッジ点灯 |
 
 ---
 

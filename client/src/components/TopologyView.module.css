@@ -679,6 +679,24 @@
   padding: 0 3px;
 }
 
+.sinkSpecDrd {
+  font-size: 8px;
+  font-weight: 700;
+  color: #ce93d8;
+  border: 1px solid #5a3a6a;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
+.sinkSpecAlt {
+  font-size: 8px;
+  font-weight: 700;
+  color: #ffcc80;
+  border: 1px solid #6a4a20;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
 .sinkSpecPdp {
   font-size: 10px;
   font-weight: 700;

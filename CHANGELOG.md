@@ -61,15 +61,27 @@ All notable changes to UCPD-Monitor are documented here.
 
 #### Discover SVIDs / Modes デコード改善 (`pd_parser.js`)
 
-- Discover SVIDs ACK: `SVID VDO[1] — <name1>  <name2>` 形式 + end-of-list 明示表示。
-- Discover Modes ACK: `Mode 1: 0x...` 形式で汎用デコード。
-- REQ / NAK / BUSY に VDO が含まれる場合に `⚠ Spec violation` を付与。
+- Discover SVIDs ACK: VDO ワードごとに `SVID VDO[N]` セクションヘッダー + `SVID[upper]` / `SVID[lower]` フィールド行の2段階ツリーに移行。end-of-list / odd-count 終端を明示。
+- Discover Modes ACK (DP SVID=0xFF01): `Mode 1: DP Capabilities VDO` セクションヘッダー + UFP_D/DFP_D/Receptacle/Signaling フィールド行の2段階ツリーに移行。
+- Discover Modes ACK (汎用 SVID): `Mode N` セクションヘッダー + `Raw` フィールド行の2段階ツリーに移行。
+- REQ / NAK / BUSY に VDO が含まれる場合に `⚠ Spec violation` を付与 (警告行はセクション前の全幅行として表示)。
 
 #### Message Log — VDM 2段階ツリー展開 (`MessageTable.jsx`)
 
-- Discover Identity ACK 展開時、VDO ごとのセクションヘッダー (`ID HEADER`, `CERT STAT`, `PRODUCT`, `UFP VDO` …) を折り畳み行として表示。
+- Discover Identity / SVIDs / Modes ACK 展開時、VDO ごとのセクションヘッダーを折り畳み行として表示。
 - ▸ / ▾ エキスパンダーをクリックして各セクションのフィールド行を個別に開閉可能。
 - 展開フィールド行はセクションヘッダーより 24px インデントした `└` 記号付きで表示。
+- セクションヘッダー前の flat 行 (`⚠ Spec violation` 等) はドロップせず全幅行として描画。
+
+#### Spec Badge — DRD バッジ (`TopologyView.jsx`)
+
+- `Source_Capabilities` / `Sink_Capabilities` PDO#1 の B25 (`dualRoleData`) が `1` の機器ボックスに紫色の `DRD` バッジを表示。
+- `appStore.js`: `INIT_SOURCE` / `INIT_SINK` に `drd: false` フィールドを追加。PR Swap ハンドラでも正しく引き継ぐ。
+
+#### Spec Badge — Alt Mode バッジ (`TopologyView.jsx`)
+
+- `SOP` フレームの Discover Identity ACK (cmd=`0x01`) 受信時、ID Header VDO B26 (`ModalOperation`) が `1` の機器ボックスにオレンジ色の `Alt Mode` バッジを表示。
+- `appStore.js`: `INIT_SOURCE` / `INIT_SINK` に `altMode: false` フィールドを追加。Vendor_Defined ハンドラ内で cmd=`0x01` ACK のみを対象に格納。
 
 #### Message Log 最小高さ
 - `.main` に `min-height: 120px` を追加し、メッセージログ領域が潰れないようにした。
@@ -82,6 +94,7 @@ All notable changes to UCPD-Monitor are documented here.
 
 - **`useRef` インポート欠落** による画面真っ暗問題を修正。
 - **Source `Cap_Ext` バッジ誤点灯**: PDO#1 の `unchunkedExtMsg` 宣言ビットで判定していた → 実際に SCDB を受信したときのみ (`!!scdb?.length`) 点灯するよう修正。
+- **Sink `Cap_Ext` バッジ誤点灯**: RDO の `unchunkedExt` ビットで判定していた → 実際に SKEDB (`Sink_Capabilities_Extended`) を受信したときのみ (`!!skedb?.length`) 点灯するよう修正。
 - **VDM バッジ消灯バグ**: `snkCapList` useMemo の依存配列に `sink.vdmSeen` が含まれていなかった → 依存配列を `[sink]` に変更。
 - **PR Swap 後に `scdb` / `skedb` / `vdmSeen` がリセットされない問題**: PR Swap ハンドラのリテラルオブジェクトにフィールドを明示追加。
 

@@ -64,6 +64,12 @@ function vidToVendor(vidStr) {
   const n = parseInt(vidStr, 16);
   return Number.isNaN(n) ? null : (USB_VID_VENDORS[n] ?? null);
 }
+// SKEDB/SCDB VID values include vendor name e.g. "0x0483 (STMicroelectronics)".
+// Extract only the hex portion for numeric comparison.
+function extractVidHex(s) {
+  const m = s?.match(/^(0x[0-9a-fA-F]+)/i);
+  return m ? m[1].toUpperCase() : (s ?? '').toUpperCase();
+}
 const PDO_COLORS = {
   'Fixed':    '#80deea',
   'Battery':  '#ffcc80',
@@ -244,7 +250,7 @@ function buildSourceItems(source) {
     const { vid, pid, bcdDevice, xid } = source.discId;
     const vendor = vidToVendor(vid);
     const scdbVid = source.scdb?.find((s) => s.label === 'VID')?.value;
-    const mismatch = scdbVid && scdbVid.toLowerCase() !== vid.toLowerCase();
+    const mismatch = scdbVid && extractVidHex(scdbVid) !== extractVidHex(vid);
     const children = [
       { key: 'VID', value: vendor ? `${vid}  ${vendor}` : vid },
       ...(pid      ? [{ key: 'PID',      value: pid }]      : []),
@@ -363,7 +369,7 @@ function buildSinkItems(sink) {
     const { vid, pid, bcdDevice, xid } = sink.discId;
     const vendor = vidToVendor(vid);
     const skedbVid = sink.skedb?.find((s) => s.label === 'VID')?.value;
-    const mismatch = skedbVid && skedbVid.toLowerCase() !== vid.toLowerCase();
+    const mismatch = skedbVid && extractVidHex(skedbVid) !== extractVidHex(vid);
     const children = [
       { key: 'VID', value: vendor ? `${vid}  ${vendor}` : vid },
       ...(pid      ? [{ key: 'PID',      value: pid }]      : []),
@@ -710,7 +716,7 @@ function SrcSpecBadge({ source }) {
   const vidStr   = scdbVid ?? discVid;
   const vendor   = vidToVendor(vidStr);
   const pid      = scdbVal('PID') ?? source.discId?.pid ?? null;
-  const vidMismatch = scdbVid && discVid && scdbVid.toLowerCase() !== discVid.toLowerCase();
+  const vidMismatch = scdbVid && discVid && extractVidHex(scdbVid) !== extractVidHex(discVid);
   const eprPdp   = scdbVal('EPR PDP Rating');
   const sprPdp   = scdbVal('SPR PDP Rating');
   const eprCap   = eprPdp && parseInt(eprPdp) > 0;
@@ -764,7 +770,7 @@ function SinkSpecBadge({ sink }) {
   const vidStr    = skedbVid ?? discVid;
   const vendor    = vidToVendor(vidStr);
   const pid       = skedbVal('PID') ?? sink.discId?.pid ?? null;
-  const vidMismatch = skedbVid && discVid && skedbVid.toLowerCase() !== discVid.toLowerCase();
+  const vidMismatch = skedbVid && discVid && extractVidHex(skedbVid) !== extractVidHex(discVid);
   const maxPdp    = skedbVal('Sink Maximum PDP');
   const eprMaxPdp = skedbVal('EPR Sink Maximum PDP');
   const eprCap    = eprMaxPdp && parseInt(eprMaxPdp) > 0;

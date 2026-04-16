@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 AsO
+
+import type {
+  Pdo, Rdo, MessageHeader, ExtendedMessageHeader,
+  PdMessage, PdFrame, ParsedCpdFile, ParsedPayloadRow, TreeRow, SidoResult,
+} from './pd_types.js';
+
 /**
  * USB Power Delivery message parser — Rev 3.2 compliant
  *
@@ -56,7 +62,7 @@ export const SOP_TYPES = {
 };
 
 /** Dir byte → human-readable direction label */
-export const CPD_DIR = {
+export const CPD_DIR: Record<number, string> = {
   0x07: 'SRC→SNK',  // Source to Sink
   0x08: 'SNK→SRC',  // Sink to Source
   0x06: 'DEBUG',    // ASCII debug/status string
@@ -64,7 +70,7 @@ export const CPD_DIR = {
 };
 
 /** SOP qualifier byte (offset 0x0D) */
-export const CPD_SOP_QUAL = {
+export const CPD_SOP_QUAL: Record<number, string> = {
   0x00: 'SOP',
   0x01: "SOP'",
   0x02: "SOP''",
@@ -75,20 +81,20 @@ export const CPD_SOP_QUAL = {
  * SOP' (0x01) = DETACHED, SOP'' (0x02) = ATTACHED
  * (observed from STM32CubeMonitor-UCPD original display)
  */
-export const CPD_EVENT_NAME = {
+export const CPD_EVENT_NAME: Record<number, string> = {
   0x01: 'DETACHED',   // SOP' cable plug marker lost
   0x02: 'ATTACHED',  // SOP'' cable plug marker detected
 };
 
 /** Record type (derived from dir) */
-export const CPD_RECORD_TYPE = {
+export const CPD_RECORD_TYPE: Record<number, string> = {
   0x07: 'PD_MSG',
   0x08: 'PD_MSG',
   0x06: 'ASCII_LOG',
   0x03: 'EVENT',
 };
 
-export const MSG_TYPE_CTRL = {
+export const MSG_TYPE_CTRL: Record<number, string> = {
   0x00: 'Reserved',
   0x01: 'GoodCRC',
   0x02: 'GotoMin',
@@ -116,7 +122,7 @@ export const MSG_TYPE_CTRL = {
   0x18: 'Get_Revision',
 };
 
-export const MSG_TYPE_DATA = {
+export const MSG_TYPE_DATA: Record<number, string> = {
   0x01: 'Source_Capabilities',
   0x02: 'Request',
   0x03: 'BIST',
@@ -133,7 +139,7 @@ export const MSG_TYPE_DATA = {
 };
 
 /** Table 6-5 (USB PD Rev 3.2): Extended Message type codes (Extended bit = 1) */
-export const MSG_TYPE_EXT = {
+export const MSG_TYPE_EXT: Record<number, string> = {
   0x01: 'Source_Capabilities_Extended',
   0x02: 'Status',
   0x03: 'Get_Battery_Cap',
@@ -165,7 +171,7 @@ export const MSG_TYPE_EXT = {
  * @param {number} word     16-bit message header word (little-endian already resolved)
  * @param {number} sopQual  0=SOP (default), 1=SOP', 2=SOP'' — governs bit-8 and bit-5 semantics (Table 6.1)
  */
-export function parseMessageHeader(word, sopQual = 0) {
+export function parseMessageHeader(word: number, sopQual = 0): MessageHeader {
   const numDataObjects = (word >> 12) & 0x7;
   const msgId          = (word >> 9) & 0x7;
   const bit8           = (word >> 8) & 0x1;
@@ -213,7 +219,7 @@ export function parseMessageHeader(word, sopQual = 0) {
  * @param {number} word  16-bit Extended Message Header (little-endian already resolved)
  * @returns {{ chunked: boolean, chunkNumber: number, requestChunk: boolean, dataSize: number }}
  */
-export function parseExtendedMsgHeader(word) {
+export function parseExtendedMsgHeader(word: number): ExtendedMessageHeader {
   return {
     chunked:      !!((word >> 15) & 0x1),   // bit 15
     chunkNumber:   (word >> 11) & 0xf,       // bits 14..11
@@ -236,7 +242,7 @@ export function parseExtendedMsgHeader(word) {
  * @param {string} source   'STM32' | 'KM003C'
  * @returns {object|null}   Decoded PdMessage or null on error
  */
-export function parseRawFrame(hexStr, source) {
+export function parseRawFrame(hexStr: string, source: string): PdMessage | null {
   try {
     const bytes = hexStr
       .trim()
@@ -246,7 +252,7 @@ export function parseRawFrame(hexStr, source) {
     if (bytes.length < 2) return null;
 
     // First two bytes: 16-bit message header (little-endian)
-    const headerWord = bytes[0] | (bytes[1] << 8);
+    const headerWord = bytes[0]! | (bytes[1]! << 8);
     const header = parseMessageHeader(headerWord);
 
     // When Extended bit is set, bytes 2-3 carry the Extended Message Header (Table 6.3).
@@ -254,7 +260,7 @@ export function parseRawFrame(hexStr, source) {
     let doOffset = 2;
     let extendedHeader = null;
     if (header.extended && bytes.length >= 4) {
-      extendedHeader = parseExtendedMsgHeader(bytes[2] | (bytes[3] << 8));
+      extendedHeader = parseExtendedMsgHeader(bytes[2]! | (bytes[3]! << 8));
       doOffset = 4;
     }
 
@@ -262,10 +268,10 @@ export function parseRawFrame(hexStr, source) {
     const dataObjects = [];
     for (let i = doOffset; i + 3 < bytes.length; i += 4) {
       const dw =
-        bytes[i] |
-        (bytes[i + 1] << 8) |
-        (bytes[i + 2] << 16) |
-        (bytes[i + 3] << 24);
+        bytes[i]! |
+        (bytes[i + 1]! << 8) |
+        (bytes[i + 2]! << 16) |
+        (bytes[i + 3]! << 24);
       dataObjects.push(dw >>> 0); // keep as unsigned
     }
 
@@ -286,15 +292,15 @@ export function parseRawFrame(hexStr, source) {
               ? decodeSinkCapsExtended(bytes.slice(doOffset))
               : null,
       pdoSummary: (header.typeName === 'Source_Info' && dataObjects.length)
-        ? decodeSIDO(dataObjects[0]).label
+        ? decodeSIDO(dataObjects[0]!).label
         : (header.typeName === 'BIST' && dataObjects.length)
           ? (() => {
-              const BIST_TYPE = { 0: 'Carrier Mode 2', 5: 'Test Data', 8: 'Shared Mode Entry', 9: 'Shared Mode Exit' };
-              return `BIST: ${BIST_TYPE[(dataObjects[0] >>> 28) & 0xF] ?? 'Reserved'}`;
+              const BIST_TYPE: Record<number, string> = { 0: 'Carrier Mode 2', 5: 'Test Data', 8: 'Shared Mode Entry', 9: 'Shared Mode Exit' };
+              return `BIST: ${BIST_TYPE[(dataObjects[0]! >>> 28) & 0xF] ?? 'Reserved'}`;
             })()
           : (header.typeName === 'Alert' && dataObjects.length)
             ? (() => {
-                const dw = dataObjects[0];
+                const dw = dataObjects[0]!;
                 const flags = [];
                 if (dw & (1 << 26)) flags.push('SrcInChange');
                 if (dw & (1 << 25)) flags.push('BatChange');
@@ -306,7 +312,7 @@ export function parseRawFrame(hexStr, source) {
               })()
             : (header.typeName === 'Battery_Status' && dataObjects.length)
               ? (() => {
-                  const dw = dataObjects[0];
+                  const dw = dataObjects[0]!
                   const bpc = (dw >>> 16) & 0xFFFF;
                   const st = (dw & 1) ? 'InvalidRef'
                     : (dw & 4) ? 'FullyDischarged'
@@ -316,13 +322,13 @@ export function parseRawFrame(hexStr, source) {
                 })()
               : (header.typeName === 'Revision' && dataObjects.length)
                 ? (() => {
-                    const dw = dataObjects[0];
+                    const dw = dataObjects[0]!
                     return `Rev ${(dw>>>28)&0xF}.${(dw>>>24)&0xF}  Ver ${(dw>>>12)&0xF}.${(dw>>>8)&0xF}`;
                   })()
                 : undefined,
     };
   } catch (e) {
-    console.warn('[pd_parser] Parse error:', e.message, hexStr);
+    console.warn('[pd_parser] Parse error:', (e as Error).message, hexStr);
     return null;
   }
 }
@@ -330,14 +336,14 @@ export function parseRawFrame(hexStr, source) {
 // ---------- PDO / RDO Decoder ----------
 
 /** Format a mV value: drop decimals when it's a round 100 mV or 1 V multiple */
-function fmtV(mv) {
+function fmtV(mv: number): string {
   if (mv % 1000 === 0) return `${mv / 1000}V`;
   if (mv % 100  === 0) return `${(mv / 1000).toFixed(1)}V`;
   return `${(mv / 1000).toFixed(2)}V`;
 }
 
 /** Format a mA value: drop decimals when clean */
-function fmtA(ma) {
+function fmtA(ma: number): string {
   if (ma % 1000 === 0) return `${ma / 1000}A`;
   if (ma % 100  === 0) return `${(ma / 1000).toFixed(1)}A`;
   return `${(ma / 1000).toFixed(2)}A`;
@@ -351,7 +357,7 @@ function fmtA(ma) {
  * @param {number[]} dataObjects Array of raw uint32 PDO words
  * @returns {string}
  */
-export function buildPdoSummary(typeName, dataObjects) {
+export function buildPdoSummary(typeName: string, dataObjects: number[]): string {
   if (!dataObjects?.length) return '';
   const isSink = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
   return dataObjects.map((dw, i) => {
@@ -388,20 +394,22 @@ export function buildPdoSummary(typeName, dataObjects) {
  * @param {string} pdoType  Optional source PDO type ('APDO_PPS' | 'APDO_AVS' | others)
  * @returns {string}
  */
-export function buildRdoSummary(dw, pdoType = 'Fixed') {
+export function buildRdoSummary(dw: number, pdoType = 'Fixed'): string {
   const rdo = decodeRDO(dw, pdoType);
-  let parts;
-  if (pdoType === 'APDO_PPS' || pdoType === 'APDO_AVS' || pdoType === 'APDO_SPR_AVS') {
+  let parts: string[];
+  if (rdo.rdoType === 'PPS' || rdo.rdoType === 'AVS') {
     parts = [`PDO#${rdo.objPos}`, `Out:${fmtV(rdo.opVoltage_mV)}`, `Op:${fmtA(rdo.opCurrent_mA)}`];
   } else if (rdo.rdoType === 'Battery') {
     parts = [`PDO#${rdo.objPos}`, `Op:${(rdo.opPower_mW/1000).toFixed(2)}W`, `${rdo.giveBack ? 'Min' : 'Max'}:${(rdo.limPower_mW/1000).toFixed(2)}W`];
   } else {
-    // Fixed / Variable / APDO_SPR_AVS all use Fixed/Variable RDO format
+    // Fixed (covers Fixed / Variable / APDO_SPR_AVS all use Fixed RDO format)
     parts = [`PDO#${rdo.objPos}`, `Op:${fmtA(rdo.opCurrent_mA)}`, `${rdo.giveBack ? 'Min' : 'Max'}:${fmtA(rdo.maxCurrent_mA)}`];
   }
   if (rdo.capMismatch) parts.push('CapMismatch');
   if (rdo.eprMode)     parts.push('EPR');
-  if (rdo.giveBack)    parts.push('GiveBack');
+  if (rdo.rdoType === 'Fixed' || rdo.rdoType === 'Battery') {
+    if (rdo.giveBack) parts.push('GiveBack');
+  }
   return parts.join('  ');
 }
 
@@ -422,7 +430,7 @@ export function buildRdoSummary(dw, pdoType = 'Fixed') {
  * @param {boolean} [isSink=false]  True when decoding Sink_Capabilities / EPR_Sink_Capabilities
  * @returns {object}  Decoded PDO with type-specific fields
  */
-export function decodePDO(dw, index, isSink = false) {
+export function decodePDO(dw: number, index: number, isSink = false): Pdo {
   const pdoType = (dw >>> 30) & 0x3;
 
   const base = { index: index + 1, raw: `0x${dw.toString(16).toUpperCase().padStart(8, '0')}` };
@@ -557,7 +565,7 @@ export function decodePDO(dw, index, isSink = false) {
       vMinMv, vMaxMv,
       iMa_9_15, iMa_15_20,
       peakCurrent,
-      peakCurrentLabel: PEAK_CURRENT_LABEL[peakCurrent],
+      peakCurrentLabel: PEAK_CURRENT_LABEL[peakCurrent]!,
       label: `SPR-AVS ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${labelSuffix}`,
     };
   }
@@ -575,14 +583,16 @@ export function decodePDO(dw, index, isSink = false) {
       'Peak 200%/1ms, 150%/2ms, 125%/10ms',
       'Peak 200%/1ms, 175%/2ms, 150%/10ms',
     ];
-    const peakCurrent      = isSink ? null : (dw >>> 26) & 0x3;
-    const peakCurrentLabel = isSink ? null : PEAK_CURRENT_LABEL[peakCurrent];
+    const peakCurrentRaw  = (dw >>> 26) & 0x3;
+    const peakCurrent      = isSink ? null : peakCurrentRaw;
+    const peakCurrentLabel = isSink ? null : (PEAK_CURRENT_LABEL[peakCurrentRaw] ?? '');
     return {
       ...base,
       pdoType: 'APDO_AVS',
       isSink,
       vMaxMv, vMinMv, pdpW,
-      ...(peakCurrent !== null ? { peakCurrent, peakCurrentLabel } : {}),
+      peakCurrent,
+      peakCurrentLabel,
       label: `AVS ${fmtV(vMinMv)}–${fmtV(vMaxMv)} / ${pdpW}W`,
     };
   }
@@ -603,8 +613,8 @@ export function decodePDO(dw, index, isSink = false) {
  * @param {number} dw  Unsigned 32-bit SIDO word
  * @returns {object}
  */
-export function decodeSIDO(dw) {
-  const portTypeRaw    = (dw >>> 31) & 0x1;
+export function decodeSIDO(dw: number): SidoResult {
+  const portTypeRaw    = ((dw >>> 31) & 0x1) as 0 | 1;
   const portType       = portTypeRaw ? 'Guaranteed' : 'Managed';
   const maxPdpW        = (dw >>> 16) & 0xFF;
   const presentPdpW    = (dw >>> 8)  & 0xFF;
@@ -633,7 +643,7 @@ export function decodeSIDO(dw) {
  * @param {string} pdoType  Source PDO type the request targets (default 'Fixed')
  * @returns {object}
  */
-export function decodeRDO(dw, pdoType = 'Fixed') {
+export function decodeRDO(dw: number, pdoType = 'Fixed'): Rdo {
   const raw          = `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
   const objPos       = (dw >>> 28) & 0xF;
   const capMismatch  = !!(dw & (1 << 26));
@@ -710,7 +720,7 @@ export function decodeRDO(dw, pdoType = 'Fixed') {
 // ==================== VDM / Structured VDM Decoders ====================
 
 /** USB PD Rev 3.2 Table 6.30 – Structured VDM command names */
-const VDM_CMD_NAMES = {
+const VDM_CMD_NAMES: Record<number, string> = {
   0x01: 'Discover Identity',
   0x02: 'Discover SVIDs',
   0x03: 'Discover Modes',
@@ -720,10 +730,10 @@ const VDM_CMD_NAMES = {
 };
 
 /** Command Type field (bits[7:6] of VDM header lower word) */
-const VDM_CMD_TYPE = ['REQ', 'ACK', 'NAK', 'BUSY'];
+const VDM_CMD_TYPE: Record<number, string> = ['REQ', 'ACK', 'NAK', 'BUSY'];
 
 /** Well-known SVIDs */
-const VDM_SVID_NAMES = {
+const VDM_SVID_NAMES: Record<number, string> = {
   0xFF00: 'PD SID',    // USB PD Standard ID (Table 6.32, §6.4.4.2.1)
   0xFF01: 'DP',        // VESA DisplayPort Alt Mode
   0x8087: 'TBT3',     // Intel Thunderbolt 3
@@ -733,7 +743,7 @@ const VDM_SVID_NAMES = {
   0x04CC: 'OPPO/OnePlus',
 };
 
-function fmtSvid(svid) {
+function fmtSvid(svid: number): string {
   const name = VDM_SVID_NAMES[svid];
   return name
     ? `${name} (0x${svid.toString(16).toUpperCase().padStart(4, '0')})`
@@ -746,18 +756,18 @@ function fmtSvid(svid) {
  *
  * DO order:  ID Header VDO, Cert Stat VDO, Product VDO, [Product Type VDO(s)]
  */
-function decodeDiscoverIdentityVDOs(vdos) {
+function decodeDiscoverIdentityVDOs(vdos: number[]): object[] {
   // Returns a flat array of section-header + field rows for tree display.
   // Section headers: { label, raw, section: true }
   // Field rows:      { label, value }  (isKeyValue in PdoRow)
   // Warning rows:    { label, raw }    (isVdoRow, warning text starts with ⚠)
-  const out = [];
-  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
-  const bin3  = (v) => v.toString(2).padStart(3, '0');
-  const bin2  = (v) => v.toString(2).padStart(2, '0');
+  const out: object[] = [];
+  const hex32 = (v: number) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  const bin3  = (v: number) => v.toString(2).padStart(3, '0');
+  const bin2  = (v: number) => v.toString(2).padStart(2, '0');
 
   // Common USB Vendor IDs (representative subset)
-  const VID_NAMES = {
+  const VID_NAMES: Record<number, string> = {
     0x03F0: 'HP', 0x0403: 'FTDI', 0x0451: 'TI', 0x046D: 'Logitech',
     0x04B4: 'Cypress', 0x04CC: 'OPPO', 0x04D8: 'Microchip',
     0x04E8: 'Samsung', 0x0483: 'STMicro', 0x05AC: 'Apple',
@@ -775,7 +785,7 @@ function decodeDiscoverIdentityVDOs(vdos) {
 
   // ---- VDO[1] ID Header VDO (Table 6.34, §6.4.4.3.1.1) ----
   if (vdos.length >= 1) {
-    const dw       = vdos[0];
+    const dw       = vdos[0]!;
     const vid      = dw & 0xFFFF;
     const usbHost  = (dw >>> 31) & 1;   // B31
     const usbDev   = (dw >>> 30) & 1;   // B30
@@ -802,14 +812,14 @@ function decodeDiscoverIdentityVDOs(vdos) {
 
   // ---- VDO[2] Cert Stat VDO (Table 6.38): B31:0 = XID ----
   if (vdos.length >= 2) {
-    const dw = vdos[1];
+    const dw = vdos[1]!;
     out.push({ label: 'CERT STAT', raw: hex32(dw), section: true });
     out.push({ label: 'XID', value: `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}` });
   }
 
   // ---- VDO[3] Product VDO (Table 6.39: B31:16=PID, B15:0=bcdDevice) ----
   if (vdos.length >= 3) {
-    const dw  = vdos[2];
+    const dw  = vdos[2]!;
     const pid = (dw >>> 16) & 0xFFFF;
     const bcd = dw & 0xFFFF;
     out.push({ label: 'PRODUCT', raw: hex32(dw), section: true });
@@ -818,14 +828,14 @@ function decodeDiscoverIdentityVDOs(vdos) {
   }
 
   // ---- VDO[4+] Product Type VDOs ----
-  const isDrd        = vdos.length >= 6 && vdos[4] === 0;
-  const idHdrDw      = vdos.length >= 1 ? vdos[0] : 0;
+  const isDrd        = vdos.length >= 6 && vdos[4]! === 0;
+  const idHdrDw      = vdos.length >= 1 ? vdos[0]! : 0;
   const ufpPType     = (idHdrDw >>> 27) & 0x7;  // Table 6.35/6.36
   const idHdrUsbHost = (idHdrDw >>> 31) & 1;
   const idHdrUsbDev  = (idHdrDw >>> 30) & 1;
 
   for (let i = 3; i < vdos.length; i++) {
-    const dw = vdos[i];
+    const dw = vdos[i]!;
 
     // DRD Pad Object (all zeros)
     if (isDrd && i === 4) {
@@ -1039,17 +1049,17 @@ function decodeDiscoverIdentityVDOs(vdos) {
  * Each VDO contains two SVIDs: bits[31:16] and bits[15:0].
  * The last entry has 0x0000 in bytes[15:0] when list ends.
  */
-function decodeDiscoverSVIDsVDOs(vdos) {
+function decodeDiscoverSVIDsVDOs(vdos: number[]): object[] {
   // Table 6.46: each VDO contains SVID n (B31:16) and SVID n+1 (B15:0).
   // Termination: odd count → B15:0=0x0000; even count → extra VDO with both 0x0000.
   // Output uses the same section/field structure as decodeDiscoverIdentityVDOs:
   //   { label, raw, section: true }  — collapsible section header per VDO word
   //   { label, value }               — field rows inside each section
-  const out = [];
-  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
-  const hex16 = (v) => `0x${(v & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
+  const out: object[] = [];
+  const hex32 = (v: number) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+  const hex16 = (v: number) => `0x${(v & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
   for (let i = 0; i < vdos.length; i++) {
-    const dw = vdos[i];
+    const dw = vdos[i]!;
     const s1 = (dw >>> 16) & 0xFFFF;
     const s2 = dw & 0xFFFF;
     const isTerminator = s1 === 0x0000 && s2 === 0x0000;
@@ -1077,11 +1087,11 @@ function decodeDiscoverSVIDsVDOs(vdos) {
  * USB PD Rev 3.2 §B.1 – DP Capabilities VDO.
  * Returns section/field structure compatible with 2-level tree.
  */
-function decodeDPModeVDOs(vdos) {
-  const out = [];
-  const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+function decodeDPModeVDOs(vdos: number[]): object[] {
+  const out: object[] = [];
+  const hex32 = (v: number) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
   for (let i = 0; i < vdos.length; i++) {
-    const dw = vdos[i];
+    const dw = vdos[i]!;
     if (i === 0) {
       // DP Capabilities VDO (Table B-1)
       const ufpD     = (dw >>> 0) & 0xF;
@@ -1089,7 +1099,7 @@ function decodeDPModeVDOs(vdos) {
       const recep    = (dw >>> 6) & 0x1;
       const usb20    = (dw >>> 7) & 0x1;
       const sig      = (dw >>> 16) & 0xF;
-      const sigNames = { 0: 'DP Gen1', 1: 'Gen2', 2: 'Reserved', 8: 'Gen3' };
+      const sigNames: Record<number, string> = { 0: 'DP Gen1', 1: 'Gen2', 2: 'Reserved', 8: 'Gen3' };
       out.push({ label: `Mode ${i + 1}: DP Capabilities VDO`, raw: hex32(dw), section: true });
       out.push({ label: 'UFP_D PinAssign', value: `0x${ufpD.toString(16).toUpperCase()}` });
       out.push({ label: 'DFP_D PinAssign', value: `0x${dfpD.toString(16).toUpperCase()}` });
@@ -1108,7 +1118,7 @@ function decodeDPModeVDOs(vdos) {
  * Decode Attention / Enter Mode / Exit Mode VDOs for DP (SVID=0xFF01).
  * DP Status VDO (Enter Mode ACK, Attention) – Table B-3.
  */
-function decodeDPStatusVDO(dw) {
+function decodeDPStatusVDO(dw: number): string {
   const connected = (dw >>> 0) & 0x3;
   const adaptor   = (dw >>> 2) & 0x1;
   const powerLow  = (dw >>> 3) & 0x1;
@@ -1141,7 +1151,7 @@ function decodeDPStatusVDO(dw) {
  * @param {string}   [srcPdoType] Optional resolved source PDO type for RDO decoding
  * @returns {object[]|null}       Decoded children, or null if not expandable
  */
-export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
+export function decodeDataObjects(typeName: string, dataObjects: number[], srcPdoType?: string): TreeRow[] | null {
   if (!dataObjects || dataObjects.length === 0) return null;
 
   switch (typeName) {
@@ -1154,28 +1164,27 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
     }
 
     case 'Request':
-      return [decodeRDO(dataObjects[0], srcPdoType ?? 'Fixed')];
+      return [decodeRDO(dataObjects[0]!, srcPdoType ?? 'Fixed')];
 
-    case 'EPR_Request':
+    case 'EPR_Request': {
       // DO[0]: EPR RDO (AVS type); DO[1]: mirror of the selected source EPR PDO (spec Table 6.38)
-      return [
-        decodeRDO(dataObjects[0], srcPdoType ?? 'APDO_AVS'),
-        dataObjects[1] !== undefined
-          ? { ...decodePDO(dataObjects[1], 1), eprMirror: true }
-          : null,
-      ].filter(Boolean);
+      const eprRows: TreeRow[] = [decodeRDO(dataObjects[0]!, srcPdoType ?? 'APDO_AVS')];
+      const eprMirrorDw = dataObjects[1];
+      if (eprMirrorDw !== undefined) eprRows.push({ ...decodePDO(eprMirrorDw, 1), eprMirror: true });
+      return eprRows;
+    }
 
     case 'EPR_Mode': {
       // USB PD Rev 3.2 Table 6.51 — EPRMDO
       // B31..24 = Action (8-bit), B23..16 = Data, B15..0 = Reserved
-      const EPR_ACTION = {
+      const EPR_ACTION: Record<number, string> = {
         0x01: 'Enter',
         0x02: 'Enter Acknowledged',
         0x03: 'Enter Succeeded',
         0x04: 'Enter Failed',
         0x05: 'Exit',
       };
-      const EPR_FAIL = {
+      const EPR_FAIL: Record<number, string> = {
         0x00: 'Unknown cause',
         0x01: 'Cable not EPR capable',
         0x02: 'Source failed to become VCONN source',
@@ -1200,7 +1209,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
 
     case 'Source_Info': {
       // Table 6.52 – Source Information Data Object (SIDO) — see decodeSIDO()
-      const sido = decodeSIDO(dataObjects[0]);
+      const sido = decodeSIDO(dataObjects[0]!);
       return [
         { label: 'Port Type',     value: sido.portType,                                                          raw: sido.raw },
         { label: 'Max PDP',       value: `${sido.maxPdpW} W`,                                                    raw: '' },
@@ -1210,7 +1219,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
     }
 
     case 'Vendor_Defined': {
-      const vdmHdr   = dataObjects[0];
+      const vdmHdr   = dataObjects[0]!;
       const svid     = (vdmHdr >>> 16) & 0xFFFF;
       const structured = (vdmHdr >>> 15) & 0x1;
 
@@ -1301,7 +1310,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
         if (vdos.length === 0) {
           decodedVdos.push({ label: `⚠ Discover Modes ACK SHALL contain at least one Mode VDO — §6.4.4.3.3`, raw: '' });
         } else {
-          const hex32 = (v) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
+          const hex32 = (v: number) => `0x${(v >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
           vdos.forEach((dw, i) => {
             decodedVdos.push({ label: `Mode ${i + 1}`, raw: hex32(dw), section: true });
             decodedVdos.push({ label: 'Raw', value: hex32(dw) });
@@ -1310,7 +1319,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       } else if ((cmd === 0x04 || cmd === 0x06) && svid === 0xFF01 && vdos.length >= 1) {
         // Enter Mode ACK / Attention for DP — first VDO is DP Status VDO
         decodedVdos = [
-          { label: decodeDPStatusVDO(vdos[0]), raw: `0x${(vdos[0] >>> 0).toString(16).toUpperCase().padStart(8,'0')}` },
+          { label: decodeDPStatusVDO(vdos[0]!), raw: `0x${(vdos[0]! >>> 0).toString(16).toUpperCase().padStart(8,'0')}` },
           ...vdos.slice(1).map((dw, i) => ({
             label: `VDO[${i + 2}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
             raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
@@ -1363,21 +1372,21 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       }
 
       return [
-        { label: headerLabel, raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}` },
-        ...decodedVdos,
+        { label: headerLabel, raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}` } as TreeRow,
+        ...(decodedVdos as TreeRow[]),
       ];
     }
 
     case 'BIST': {
       // Table 6.9 (USB PD Rev 3.2) – BIST Data Object (BDO)
       // B31..28 = BIST Data Object Type
-      const BIST_TYPE = {
+      const BIST_TYPE: Record<number, string> = {
         0: 'BIST Carrier Mode 2',
         5: 'BIST Test Data',
         8: 'BIST Shared Test Mode Entry',
         9: 'BIST Shared Test Mode Exit',
       };
-      const dw0   = dataObjects[0];
+      const dw0   = dataObjects[0]!;
       const bdoT  = (dw0 >>> 28) & 0xF;
       const label = BIST_TYPE[bdoT] ?? `Reserved(${bdoT})`;
       const raw0  = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
@@ -1397,7 +1406,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       // B2 = Battery Fully Discharged
       // B1 = Battery is Charging
       // B0 = Invalid Battery Reference
-      const dw0 = dataObjects[0];
+      const dw0 = dataObjects[0]!;
       const bpc = (dw0 >>> 16) & 0xFFFF;
       const fullyCharged    = !!(dw0 & (1 << 3));
       const fullyDischarged = !!(dw0 & (1 << 2));
@@ -1426,7 +1435,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       // B22 = Operating Condition Change
       // B19..16 = Fixed Batteries Battery Status Bits (bat4..1)
       // B3..0   = Hot-swappable Batteries Status Bits (bat4..1)
-      const dw0      = dataObjects[0];
+      const dw0      = dataObjects[0]!;
       const extended = !!(dw0 & (1 << 31));
       const srcIn    = !!(dw0 & (1 << 26));
       const batChg   = !!(dw0 & (1 << 25));
@@ -1448,7 +1457,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       const rows = [{ label: 'Alert', value: flags.join('  ') || '(none)', raw: raw0 }];
       // Extended alert: subsequent DOs carry additional alert data
       for (let i = 1; i < dataObjects.length; i++) {
-        const w = dataObjects[i];
+        const w = dataObjects[i]!;
         rows.push({ label: `Alert Data[${i}]`, value: `0x${w.toString(16).toUpperCase().padStart(8, '0')}`, raw: `0x${w.toString(16).toUpperCase().padStart(8, '0')}` });
       }
       return rows;
@@ -1483,8 +1492,8 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       // B21     = EPR Cable Capable
       // B20     = Modal Operation Supported
       // B16     = HPD Level High
-      const USB_MODE = { 0: 'USB 2.0', 1: 'USB 3.2', 2: 'USB4 Gen2 (20G)', 3: 'USB4 Gen3 (40G)', 4: 'USB4 Gen4 (80G)' };
-      const dw0  = dataObjects[0];
+      const USB_MODE: Record<number, string> = { 0: 'USB 2.0', 1: 'USB 3.2', 2: 'USB4 Gen2 (20G)', 3: 'USB4 Gen3 (40G)', 4: 'USB4 Gen4 (80G)' };
+      const dw0  = dataObjects[0]!
       const mode = (dw0 >>> 27) & 0x7;
       const raw0 = `0x${dw0.toString(16).toUpperCase().padStart(8, '0')}`;
       const rows = [
@@ -1505,7 +1514,7 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
       // Table 6.53 (USB PD Rev 3.2) – Revision Data Object
       // B31..28 = Major Revision (BCD), B27..24 = Minor Revision (BCD)
       // B15..12 = Major Version (BCD),  B11..8  = Minor Version (BCD)
-      const dw0      = dataObjects[0];
+      const dw0      = dataObjects[0]!
       const revMajor = (dw0 >>> 28) & 0xF;
       const revMinor = (dw0 >>> 24) & 0xF;
       const verMajor = (dw0 >>> 12) & 0xF;
@@ -1535,15 +1544,15 @@ export function decodeDataObjects(typeName, dataObjects, srcPdoType) {
  * @param {Uint8Array|number[]} bytes  Raw SCEDB bytes (at least 25)
  * @returns {{ label: string, value: string }[]}  Array of display items
  */
-export function decodeSourceCapsExtended(bytes) {
+export function decodeSourceCapsExtended(bytes: Uint8Array | number[]): ParsedPayloadRow[] {
   if (!bytes || bytes.length < 25) return [];
 
-  const u8  = (o) => bytes[o] ?? 0;
-  const u16 = (o) => u8(o) | (u8(o + 1) << 8);
-  const u32 = (o) => (u8(o) | (u8(o+1) << 8) | (u8(o+2) << 16) | (u8(o+3) << 24)) >>> 0;
+  const u8  = (o: number) => bytes[o] ?? 0;
+  const u16 = (o: number) => u8(o) | (u8(o + 1) << 8);
+  const u32 = (o: number) => (u8(o) | (u8(o+1) << 8) | (u8(o+2) << 16) | (u8(o+3) << 24)) >>> 0;
 
-  const items = [];
-  const item  = (label, value) => items.push({ label, value });
+  const items: ParsedPayloadRow[] = [];
+  const item  = (label: string, value: string) => items.push({ label, value });
 
   // Vendor / Product IDs
   item('VID', `0x${u16(0).toString(16).toUpperCase().padStart(4, '0')}`);
@@ -1581,7 +1590,7 @@ export function decodeSourceCapsExtended(bytes) {
   item('Touch Current', tcParts.length ? tcParts.join(', ') : 'Standard');
 
   // Peak Current (2 bytes each, 3 entries at offsets 14, 16, 18)
-  function decodePeak(offset) {
+  function decodePeak(offset: number): string {
     const w     = u16(offset);
     if (w === 0) return 'Not specified';
     const pct    = Math.min(w & 0x1f, 25) * 10;    // bits 4..0 × 10%, max 250
@@ -1627,11 +1636,11 @@ export function decodeSourceCapsExtended(bytes) {
  * @param {Uint8Array|number[]} bytes  Raw SDB bytes (at least 7)
  * @returns {{ label: string, value: string }[]}
  */
-export function decodeStatus(bytes) {
+export function decodeStatus(bytes: Uint8Array | number[]): ParsedPayloadRow[] {
   if (!bytes || bytes.length < 7) return [];
-  const u8 = (o) => bytes[o] ?? 0;
-  const items = [];
-  const item  = (label, value) => items.push({ label, value });
+  const u8 = (o: number) => bytes[o] ?? 0;
+  const items: ParsedPayloadRow[] = [];
+  const item  = (label: string, value: string) => items.push({ label, value });
 
   // Byte 0: Internal Temperature
   const temp = u8(0);
@@ -1663,7 +1672,7 @@ export function decodeStatus(bytes) {
 
   // Byte 4: Temperature Status
   const TEMP_STATUS = ['Not Supported', 'Normal', 'Warning', 'Over temperature'];
-  item('Temp Status', TEMP_STATUS[(u8(4) >> 1) & 0x3]);
+  item('Temp Status', TEMP_STATUS[(u8(4) >> 1) & 0x3] ?? 'Unknown');
 
   // Byte 5: Power Status
   const ps = u8(5);
@@ -1679,9 +1688,9 @@ export function decodeStatus(bytes) {
   const psc = u8(6);
   const NEW_STATE = ['Not supported','S0','Modern Standby','S3','S4','S5','G3','Reserved'];
   const LED_STATE = ['Off','On','Blinking','Breathing'];
-  item('New Power State', NEW_STATE[psc & 0x7]);
+  item('New Power State', NEW_STATE[psc & 0x7] ?? 'Unknown');
   const led = (psc >> 3) & 0x7;
-  if (led <= 3) item('LED Indicator', LED_STATE[led]);
+  if (led <= 3) item('LED Indicator', LED_STATE[led] ?? '');
 
   return items;
 }
@@ -1703,17 +1712,17 @@ export function decodeStatus(bytes) {
  * @param {Uint8Array|number[]} bytes  Raw bytes starting at doOffset (≥2 expected per spec)
  * @returns {{ label: string, value: string }[]}
  */
-export function decodeExtendedControl(bytes) {
+export function decodeExtendedControl(bytes: Uint8Array | number[]): ParsedPayloadRow[] {
   if (!bytes || bytes.length < 2) return [];
-  const ECDB_TYPE = {
+  const ECDB_TYPE: Record<number, string> = {
     0x01: 'EPR_Get_Source_Cap',
     0x02: 'EPR_Get_Sink_Cap',
     0x03: 'EPR_KeepAlive',
     0x04: 'EPR_KeepAlive_Ack',
   };
-  const type = bytes[0] & 0xFF;
-  const data = bytes[1] & 0xFF;
-  const items = [];
+  const type = (bytes[0] ?? 0) & 0xFF;
+  const data = (bytes[1] ?? 0) & 0xFF;
+  const items: ParsedPayloadRow[] = [];
   items.push({ label: 'Type', value: ECDB_TYPE[type] ?? `Reserved(0x${type.toString(16).toUpperCase()})` });
   // Data byte: spec says "Shall be set to zero when not used" — flag if violated
   if (data !== 0) {
@@ -1747,15 +1756,15 @@ export function decodeExtendedControl(bytes) {
  * @param {Uint8Array|number[]} bytes  Raw SKEDB bytes (at least 21)
  * @returns {{ label: string, value: string }[]}
  */
-export function decodeSinkCapsExtended(bytes) {
+export function decodeSinkCapsExtended(bytes: Uint8Array | number[]): ParsedPayloadRow[] {
   if (!bytes || bytes.length < 21) return [];
 
-  const u8  = (o) => bytes[o] ?? 0;
-  const u16 = (o) => u8(o) | (u8(o + 1) << 8);
-  const u32 = (o) => (u8(o) | (u8(o+1)<<8) | (u8(o+2)<<16) | (u8(o+3)<<24)) >>> 0;
+  const u8  = (o: number) => bytes[o] ?? 0;
+  const u16 = (o: number) => u8(o) | (u8(o + 1) << 8);
+  const u32 = (o: number) => (u8(o) | (u8(o+1)<<8) | (u8(o+2)<<16) | (u8(o+3)<<24)) >>> 0;
 
-  const items = [];
-  const item  = (label, value) => items.push({ label, value });
+  const items: ParsedPayloadRow[] = [];
+  const item  = (label: string, value: string) => items.push({ label, value });
 
   item('VID', `0x${u16(0).toString(16).toUpperCase().padStart(4, '0')}`);
   item('PID', `0x${u16(2).toString(16).toUpperCase().padStart(4, '0')}`);
@@ -1832,7 +1841,7 @@ const DECODED_MSG_TYPES = new Set([
  * @param {{ typeName: string, isControl: boolean, extended: boolean, numDataObjects: number }} header
  * @returns {boolean}
  */
-export function isUndecodedMessage(header) {
+export function isUndecodedMessage(header: MessageHeader | null | undefined): boolean {
   if (!header) return false;
   // Control messages: named by type code only, no payload
   if (header.isControl) return false;
@@ -1851,14 +1860,15 @@ export function isUndecodedMessage(header) {
  * @param {string} context  Free-text provenance label, e.g. "file:capture.cpd" or "websocket"
  * @returns {object}
  */
-export function buildUnknownRecord(frame, context) {
-  const h = frame.header ?? {};
+export function buildUnknownRecord(frame: Record<string, unknown>, context: string): Record<string, unknown> {
+  const cpd = frame.cpd as { dirName?: string; sopQualName?: string } | null | undefined;
+  const h   = (frame.header as Partial<MessageHeader> | null | undefined) ?? {};
   return {
     context,
     ts_raw:           String(frame.ts ?? 0),
     source:           frame.source ?? '',
-    direction:        frame.cpd?.dirName ?? '',
-    sop:              frame.cpd?.sopQualName ?? 'SOP',
+    direction:        cpd?.dirName ?? '',
+    sop:              cpd?.sopQualName ?? 'SOP',
     spec_revision:    h.specRevision ?? '',
     msg_id:           h.msgId ?? 0,
     type_name:        h.typeName ?? '',
@@ -1866,7 +1876,7 @@ export function buildUnknownRecord(frame, context) {
     is_control:       !!(h.isControl),
     num_data_objects: h.numDataObjects ?? 0,
     raw_hex:          frame.raw ?? '',
-    data_objects:     (frame.dataObjects ?? []).map(
+    data_objects:     (frame.dataObjects as number[] | null | undefined ?? []).map(
                         (dw) => `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`
                       ),
   };
@@ -1884,12 +1894,12 @@ const CAT_TO_LEN_BIAS = 9;  // payloadLen = cat - CAT_TO_LEN_BIAS
  * @param {ArrayBuffer} buffer  Contents of the .cpd file
  * @returns {{ frames: object[], errors: string[] }}
  */
-export function parseCpdFile(buffer) {
+export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
   const view   = new DataView(buffer);
   const bytes  = new Uint8Array(buffer);
   const total  = bytes.length;
-  const frames = [];
-  const errors = [];
+  const frames: PdFrame[] = [];
+  const errors: string[]  = [];
 
   let offset = 0;
 
@@ -1902,12 +1912,13 @@ export function parseCpdFile(buffer) {
     }
 
     // --- Read header fields ---
+    // We are inside offset <= total - CPD_FIXED_HDR (=20), so offsets 6..15 are within bounds.
     const fixedField  = view.getUint16(offset + 4, true);   // LE: 0x0032
-    const catByte     = bytes[offset + 6];                   // payloadLen + 9
-    const dirByte     = bytes[offset + 7];                   // 0x03/0x06/0x07/0x08
+    const catByte     = bytes[offset + 6]!;                  // payloadLen + 9
+    const dirByte     = bytes[offset + 7]!;                  // 0x03/0x06/0x07/0x08
     const timestamp   = view.getUint32(offset + 8, true);   // LE uint32
-    const sopQual     = bytes[offset + 13];                  // 0x00=SOP, 0x01=SOP', 0x02=SOP''
-    const payloadLen  = bytes[offset + 15];                  // direct length byte
+    const sopQual     = bytes[offset + 13]!;                 // 0x00=SOP, 0x01=SOP', 0x02=SOP''
+    const payloadLen  = bytes[offset + 15]!;                 // direct length byte
 
     // Cross-check: cat should equal payloadLen + 9
     const catDerived = catByte - CAT_TO_LEN_BIAS;
@@ -1930,14 +1941,15 @@ export function parseCpdFile(buffer) {
     // Read sentinel (accept any 4-byte value; warn if unexpected)
     const sentinelBytes = Array.from(bytes.slice(sentinelStart, sentinelStart + 4));
     const sentinelHex   = sentinelBytes.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-    if (sentinelBytes.some((b, i) => b !== 0xA5)) {
+    if (sentinelBytes.some((b) => b !== 0xA5)) {
       errors.push(`offset 0x${offset.toString(16)}: non-standard sentinel [${sentinelHex}]`);
     }
 
-    const payload = bytes.slice(payloadStart, payloadEnd);
+    const payload    = bytes.slice(payloadStart, payloadEnd);
     const recordType = CPD_RECORD_TYPE[dirByte] ?? 'UNKNOWN';
 
-    let frame = {
+    // Use Record<string, unknown> to allow incremental property addition; cast at push time.
+    const frame: Record<string, unknown> = {
       ts:     timestamp,
       source: 'STM32',
       recordType,
@@ -1945,7 +1957,7 @@ export function parseCpdFile(buffer) {
         fixedField,
         cat: catByte,
         dir: dirByte,
-        dirName:    CPD_DIR[dirByte] ?? `0x${dirByte.toString(16)}`,
+        dirName:     CPD_DIR[dirByte]     ?? `0x${dirByte.toString(16)}`,
         sopQual,
         sopQualName: CPD_SOP_QUAL[sopQual] ?? `0x${sopQual.toString(16)}`,
         payloadLen,
@@ -1958,21 +1970,21 @@ export function parseCpdFile(buffer) {
     if (recordType === 'ASCII_LOG') {
       // dir=0x06: ASCII debug string (e.g., "VBUS:941: CC:0" or "VBUS:2421, CC:2")
       const asciiLog = new TextDecoder().decode(payload);
-      frame.asciiLog = asciiLog;
-      frame.raw      = asciiLog;
+      frame['asciiLog'] = asciiLog;
+      frame['raw']      = asciiLog;
       // Parse structured fields: VBUS:<mV>[,:] CC:<pin>
       const vbusM = asciiLog.match(/VBUS:([\d]+)/);
       const ccM   = asciiLog.match(/CC:([\d]+)/);
-      if (vbusM) frame.vbusMv = parseInt(vbusM[1], 10);
-      if (ccM)   frame.ccPin  = parseInt(ccM[1],   10);
+      if (vbusM) frame['vbusMv'] = parseInt(vbusM[1]!, 10);
+      if (ccM)   frame['ccPin']  = parseInt(ccM[1]!,   10);
     } else if (recordType === 'EVENT') {
       // dir=0x03, len=0: SOP'/SOP'' detection event marker
-      const eventName  = CPD_EVENT_NAME[sopQual] ?? `EVENT_SOP_0x${sopQual.toString(16)}`;
-      frame.eventName  = eventName;
-      frame.raw        = eventName;
+      const eventName   = CPD_EVENT_NAME[sopQual] ?? `EVENT_SOP_0x${sopQual.toString(16)}`;
+      frame['eventName'] = eventName;
+      frame['raw']       = eventName;
     } else if (recordType === 'PD_MSG' && payload.length >= 2) {
       // dir=0x07/0x08: USB-PD message
-      const headerWord = (payload[0]) | (payload[1] << 8);
+      const headerWord = payload[0]! | (payload[1]! << 8);
       const header     = parseMessageHeader(headerWord, sopQual);
 
       // When Extended bit is set, bytes 2-3 of the payload carry the Extended Message Header
@@ -1980,42 +1992,47 @@ export function parseCpdFile(buffer) {
       let doOffset = 2;
       let extendedHeader = null;
       if (header.extended && payload.length >= 4) {
-        extendedHeader = parseExtendedMsgHeader(payload[2] | (payload[3] << 8));
+        extendedHeader = parseExtendedMsgHeader(payload[2]! | (payload[3]! << 8));
         doOffset = 4;
       }
 
-      const dataObjects = [];
+      const dataObjects: number[] = [];
       for (let i = doOffset; i + 3 < payload.length; i += 4) {
-        const dw = ((payload[i]) |
-                    (payload[i + 1] << 8) |
-                    (payload[i + 2] << 16) |
-                    (payload[i + 3] << 24)) >>> 0;
+        const dw = (payload[i]! |
+                    (payload[i + 1]! << 8) |
+                    (payload[i + 2]! << 16) |
+                    (payload[i + 3]! << 24)) >>> 0;
         dataObjects.push(dw);
       }
 
-      frame.header         = header;
-      frame.extendedHeader = extendedHeader;
-      frame.dataObjects    = dataObjects;
+      frame['header']         = header;
+      frame['extendedHeader'] = extendedHeader;
+      frame['dataObjects']    = dataObjects;
       // Byte-level extended payload decode (before raw is set)
+      let parsedPayload: ParsedPayloadRow[] | undefined;
       if (header.typeName === 'Source_Capabilities_Extended' && payload.length >= doOffset + 25) {
-        frame.parsedPayload = decodeSourceCapsExtended(payload.slice(doOffset, doOffset + 25));
+        parsedPayload = decodeSourceCapsExtended(payload.slice(doOffset, doOffset + 25));
+        frame['parsedPayload'] = parsedPayload;
       } else if (header.typeName === 'Status' && payload.length >= doOffset + 7) {
-        frame.parsedPayload = decodeStatus(payload.slice(doOffset, doOffset + 7));
+        parsedPayload = decodeStatus(payload.slice(doOffset, doOffset + 7));
+        frame['parsedPayload'] = parsedPayload;
       } else if (header.typeName === 'Extended_Control' && payload.length >= doOffset + 2) {
-        frame.parsedPayload = decodeExtendedControl(payload.slice(doOffset));
+        parsedPayload = decodeExtendedControl(payload.slice(doOffset));
+        frame['parsedPayload'] = parsedPayload;
       } else if (header.typeName === 'Sink_Capabilities_Extended' && payload.length >= doOffset + 21) {
-        frame.parsedPayload = decodeSinkCapsExtended(payload.slice(doOffset));
+        parsedPayload = decodeSinkCapsExtended(payload.slice(doOffset));
+        frame['parsedPayload'] = parsedPayload;
       }
-      frame.raw         = Array.from(payload)
+      frame['raw'] = Array.from(payload)
         .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
         .join(' ');
       // Attach compact inline summary for capability messages
       if (header.typeName === 'Source_Capabilities' || header.typeName === 'Sink_Capabilities'
           || header.typeName === 'EPR_Source_Capabilities' || header.typeName === 'EPR_Sink_Capabilities') {
         if (dataObjects.length > 0) {
-          frame.pdoSummary = buildPdoSummary(header.typeName, dataObjects);
+          frame['pdoSummary'] = buildPdoSummary(header.typeName, dataObjects);
           // EPR marker: any fixed PDO has eprModeCapable set
-          frame.eprCapable = dataObjects.some((dw) => {
+          frame['eprCapable'] = dataObjects.some((dw) => {
             const pdoType = (dw >>> 30) & 0x3;
             return pdoType === 0b00 && !!(dw & (1 << 23));
           });
@@ -2024,78 +2041,82 @@ export function parseCpdFile(buffer) {
           const chunkInfo = extendedHeader.requestChunk
             ? `Chunk#${extendedHeader.chunkNumber} [Req]`
             : `Chunk#${extendedHeader.chunkNumber}`;
-          frame.pdoSummary = chunkInfo;
+          frame['pdoSummary'] = chunkInfo;
         }
       } else if ((header.typeName === 'Request' || header.typeName === 'EPR_Request') && dataObjects.length) {
-        frame.pdoSummary = buildRdoSummary(dataObjects[0]);
+        frame['pdoSummary'] = buildRdoSummary(dataObjects[0]!);
       } else if (header.typeName === 'EPR_Mode' && dataObjects.length) {
-        const EPR_ACTION = { 0x01: 'Enter', 0x02: 'Enter Acknowledged', 0x03: 'Enter Succeeded',
-                             0x04: 'Enter Failed', 0x05: 'Exit' };
-        const EPR_FAIL   = { 0x00: 'Unknown', 0x01: 'Cable not EPR capable',
-                             0x02: 'VCONN source failed', 0x03: 'EPR bit not set in RDO',
-                             0x04: 'Source unable to enter', 0x05: 'EPR bit not set in PDO' };
-        const dw     = dataObjects[0];
+        const EPR_ACTION: Record<number, string> = {
+          0x01: 'Enter', 0x02: 'Enter Acknowledged', 0x03: 'Enter Succeeded',
+          0x04: 'Enter Failed', 0x05: 'Exit',
+        };
+        const EPR_FAIL: Record<number, string> = {
+          0x00: 'Unknown', 0x01: 'Cable not EPR capable',
+          0x02: 'VCONN source failed', 0x03: 'EPR bit not set in RDO',
+          0x04: 'Source unable to enter', 0x05: 'EPR bit not set in PDO',
+        };
+        const dw     = dataObjects[0]!;
         const action = (dw >>> 24) & 0xFF;
         const data   = (dw >>> 16) & 0xFF;
         const label  = EPR_ACTION[action] ?? `Action:0x${action.toString(16).toUpperCase()}`;
         const extra  = action === 0x01 && data ? `  PDP:${data}W`
                      : action === 0x04         ? `  (${EPR_FAIL[data] ?? `0x${data.toString(16)}`})`
                      : '';
-        frame.pdoSummary = label + extra;
+        frame['pdoSummary'] = label + extra;
       } else if (header.typeName === 'Source_Info' && dataObjects.length) {
-        const dw     = dataObjects[0];
+        const dw     = dataObjects[0]!;
         const type   = (dw >>> 31) & 0x1 ? 'Guaranteed' : 'Managed';
         const maxP   = (dw >>> 16) & 0xFF;
         const presP  = (dw >>> 8)  & 0xFF;
         const repP   =  dw         & 0xFF;
-        frame.pdoSummary = `${type}  Max:${maxP}W  Present:${presP}W  Reported:${repP}W`;
+        frame['pdoSummary'] = `${type}  Max:${maxP}W  Present:${presP}W  Reported:${repP}W`;
       } else if (header.typeName === 'Vendor_Defined' && dataObjects.length) {
-        const vdmHdr     = dataObjects[0];
+        const vdmHdr     = dataObjects[0]!;
         const svid       = (vdmHdr >>> 16) & 0xFFFF;
         const structured = (vdmHdr >>> 15) & 0x1;
         const svidStr    = fmtSvid(svid);
         if (!structured) {
           const vendorData = vdmHdr & 0x7FFF;
-          frame.pdoSummary = `${svidStr} [Unstructured] VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`;
+          frame['pdoSummary'] = `${svidStr} [Unstructured] VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`;
         } else {
           const cmd         = vdmHdr & 0x1F;
           const cmdType     = (vdmHdr >>> 6) & 0x3;
           const cmdName     = VDM_CMD_NAMES[cmd] ?? `CMD_0x${cmd.toString(16)}`;
           const cmdTypeName = VDM_CMD_TYPE[cmdType];
-          frame.pdoSummary  = `${svidStr}  ${cmdName} [${cmdTypeName}]`;
+          frame['pdoSummary']  = `${svidStr}  ${cmdName} [${cmdTypeName}]`;
         }
       } else if (header.extended && extendedHeader) {
         // Compact inline summary for Extended messages
-        if (header.typeName === 'Source_Capabilities_Extended' && frame.parsedPayload?.length) {
-          const vid = frame.parsedPayload.find((i) => i.label === 'VID')?.value ?? '?';
-          const pid = frame.parsedPayload.find((i) => i.label === 'PID')?.value ?? '?';
-          const fw  = frame.parsedPayload.find((i) => i.label === 'FW Version')?.value ?? '?';
-          frame.pdoSummary = `VID:${vid}  PID:${pid}  FW:${fw}`;
-        } else if (header.typeName === 'Status' && frame.parsedPayload?.length) {
-          const ef   = frame.parsedPayload.find((i) => i.label === 'Event Flags')?.value ?? '';
-          const temp = frame.parsedPayload.find((i) => i.label === 'Temp Status')?.value ?? '';
-          frame.pdoSummary = [ef, temp].filter(Boolean).join('  │  ');
-        } else if (header.typeName === 'Extended_Control' && frame.parsedPayload?.length) {
-          frame.pdoSummary = frame.parsedPayload[0]?.value ?? '';
-        } else if (header.typeName === 'Sink_Capabilities_Extended' && frame.parsedPayload?.length) {
-          const vid    = frame.parsedPayload.find((i) => i.label === 'VID')?.value ?? '?';
-          const pid    = frame.parsedPayload.find((i) => i.label === 'PID')?.value ?? '?';
-          const maxPdp = frame.parsedPayload.find((i) => i.label === 'Sink Maximum PDP')?.value ?? '?';
-          frame.pdoSummary = `VID:${vid}  PID:${pid}  MaxPDP:${maxPdp}`;
+        if (header.typeName === 'Source_Capabilities_Extended' && parsedPayload?.length) {
+          const vid = parsedPayload.find((r) => r.label === 'VID')?.value ?? '?';
+          const pid = parsedPayload.find((r) => r.label === 'PID')?.value ?? '?';
+          const fw  = parsedPayload.find((r) => r.label === 'FW Version')?.value ?? '?';
+          frame['pdoSummary'] = `VID:${vid}  PID:${pid}  FW:${fw}`;
+        } else if (header.typeName === 'Status' && parsedPayload?.length) {
+          const ef   = parsedPayload.find((r) => r.label === 'Event Flags')?.value ?? '';
+          const temp = parsedPayload.find((r) => r.label === 'Temp Status')?.value ?? '';
+          frame['pdoSummary'] = [ef, temp].filter(Boolean).join('  │  ');
+        } else if (header.typeName === 'Extended_Control' && parsedPayload?.length) {
+          frame['pdoSummary'] = parsedPayload[0]?.value ?? '';
+        } else if (header.typeName === 'Sink_Capabilities_Extended' && parsedPayload?.length) {
+          const vid    = parsedPayload.find((r) => r.label === 'VID')?.value ?? '?';
+          const pid    = parsedPayload.find((r) => r.label === 'PID')?.value ?? '?';
+          const maxPdp = parsedPayload.find((r) => r.label === 'Sink Maximum PDP')?.value ?? '?';
+          frame['pdoSummary'] = `VID:${vid}  PID:${pid}  MaxPDP:${maxPdp}`;
         } else {
           const chunks = extendedHeader.chunked
             ? `Chunk#${extendedHeader.chunkNumber}${extendedHeader.requestChunk ? ' [Req]' : ''}`
             : 'Unchunked';
-          frame.pdoSummary = `${chunks}  ${extendedHeader.dataSize}B`;
+          frame['pdoSummary'] = `${chunks}  ${extendedHeader.dataSize}B`;
         }
       }
     } else {
-      frame.raw = Array.from(payload)
+      frame['raw'] = Array.from(payload)
         .map((b) => b.toString(16).padStart(2, '0').toUpperCase())
         .join(' ');
     }
 
-    frames.push(frame);
+    frames.push(frame as unknown as PdFrame);
     offset += CPD_FIXED_HDR + payloadLen;
   }
 

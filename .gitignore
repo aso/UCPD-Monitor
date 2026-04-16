@@ -20,6 +20,9 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Python virtual environment
+.venv/
+
 # AI workspace notes
 memories/
 

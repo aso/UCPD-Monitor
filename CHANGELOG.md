@@ -4,6 +4,25 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.3] - 2026-04-16
+
+### Added
+
+#### シリアルポート自動選択の改善 (`SerialBar.jsx`)
+- ポートリストに既知デバイス (STM32 STLINK) が **唯一** の場合のみ自動選択。複数ある場合は選択しない。
+- ポートリストが **変動した場合にのみ** 自動選択ロジックを実行 (2秒ポーリングの毎ループでは発火しない)。
+- 選択中のポートが抜去された場合: 拡張ロール探索で次候補を選択。
+  - 直前リスト上の拡張インデックスから下方検索 → 折り返しでトップへ → 既知デバイスが 1 台なら即選択。
+  - 既知デバイスが全滅した場合は空欄 ("— select port —" プレースホルダー)。
+  - ポート自体が 0 件の場合は "— no devices —" を表示。
+
+#### TypeScript 移行 (`pd_parser.ts`, `pd_types.ts`)
+- `pd_parser.js` を `pd_parser.ts` へ改名 (git mv でヒストリ保持)。
+- `pd_types.ts` を新規作成: `Pdo` / `Rdo` / `MessageHeader` / `PdFrame` / `ParsedCpdFile` 等の静的型定義。
+- `tsconfig.json` (`strict: true`, `noUncheckedIndexedAccess: true`) で全エクスポート関数に戻り型注釈。`tsc --noEmit` エラー 0 件を確認。
+
+---
+
 ## [3.2.2] - 2026-04-15
 
 ### Added

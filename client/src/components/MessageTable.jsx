@@ -24,10 +24,15 @@ const SOP_QUAL_COLORS = {
 };
 
 const DIR_LABELS = {
-  'SRC→SNK': { color: '#ef9a9a', label: 'SRC→SNK' },
-  'SNK→SRC': { color: '#90caf9', label: 'SNK→SRC' },
+  'SRC→SNK': { color: '#ef9a9a', label: 'SRC→SNK', sender: 'SRC', receiver: 'SNK' },
+  'SNK→SRC': { color: '#90caf9', label: 'SNK→SRC', sender: 'SNK', receiver: 'SRC' },
   'DEBUG':   { color: '#ce93d8', label: 'DEBUG'   },
   'EVENT':   { color: '#fff176', label: 'EVENT'   },
+};
+
+const DATA_ROLE_COLORS = {
+  'DFP': '#80cbc4',
+  'UFP': '#ce93d8',
 };
 
 const PDO_TYPE_COLORS = {
@@ -333,13 +338,23 @@ const MessageRow = memo(function MessageRow({
         <td className={styles.ts}>
           {cpd ? formatMsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23)}
         </td>
-        <td style={{ color: dirInfo.color, fontWeight: 'bold' }}>
-          {dirInfo.label}
+        <td style={{ fontWeight: 'bold' }}>
+          {dirInfo.sender ? (
+            <>
+              <span style={{ color: dirInfo.color }}>{dirInfo.sender}</span>
+              <span style={{ color: '#555' }}>→</span>
+              <span style={{ color: dirInfo.color, opacity: 0.4 }}>{dirInfo.receiver}</span>
+            </>
+          ) : (
+            <span style={{ color: dirInfo.color }}>{dirInfo.label}</span>
+          )}
           {header && (
-            <span style={{ color: '#888', fontWeight: 'normal', marginLeft: 4, fontSize: 11 }}>
+            <span style={{ fontWeight: 'normal', marginLeft: 5, fontSize: 11 }}>
               {header.cablePlug !== null
-                ? (header.cablePlug ? ' Plug' : ' Port')
-                : ` ${header.portPowerRole}/${header.portDataRole}`}
+                ? <span style={{ color: '#888' }}>{header.cablePlug ? 'Plug' : 'Port'}</span>
+                : header.portDataRole
+                  ? <span style={{ color: DATA_ROLE_COLORS[header.portDataRole] ?? '#aaa' }}>{header.portDataRole}</span>
+                  : null}
             </span>
           )}
         </td>

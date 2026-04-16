@@ -1,0 +1,135 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background: #121212;
+  color: #e0e0e0;
+  position: relative; /* needed for overlay positioning */
+}
+
+/* ---- Drag-and-drop overlay ---- */
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  background: rgba(10, 20, 40, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border: 3px dashed #4caf50;
+}
+
+.dropOverlayInner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #4caf50;
+  font-size: 22px;
+  font-weight: bold;
+}
+
+.dropIcon {
+  font-size: 48px;
+}
+
+.titleBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 16px;
+  background: #1f1f2e;
+  border-bottom: 1px solid #333;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #90caf9;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.titleVersion {
+  font-size: 10px;
+  font-weight: 400;
+  color: #5a7aa0;
+  letter-spacing: 0.5px;
+}
+
+.pingBtn {
+  background: none;
+  border: 1px solid #555;
+  color: #aaa;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.pingBtn:hover { border-color: #90caf9; color: #90caf9; }
+
+.importBtn {
+  background: none;
+  border: 1px solid #4caf50;
+  color: #4caf50;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.importBtn:hover:not(:disabled) { background: #1b2e1b; }
+.importBtn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.separator {
+  display: inline-block;
+  width: 1px;
+  height: 20px;
+  background: #333;
+  flex-shrink: 0;
+}
+
+/* Import status badge shown in title bar */
+.importBadge {
+  font-size: 11px;
+  color: #a5d6a7;
+  white-space: nowrap;
+}
+.importWarn {
+  color: #ffb74d;
+}
+
+.panelToggleBtn {
+  background: none;
+  border: 1px solid #444;
+  color: #777;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.panelToggleBtn:hover { border-color: #90caf9; color: #90caf9; }
+.panelToggleActive {
+  border-color: #90caf9;
+  color: #90caf9;
+  background: rgba(144, 202, 249, 0.08);
+}
+
+.main {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+}
+
+.consoleArea {
+  height: 180px;
+  flex-shrink: 0;
+}

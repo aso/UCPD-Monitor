@@ -1,0 +1,70 @@
+{
+  "name": "usb-pd-monitor",
+  "version": "3.2.2",
+  "description": "STM32 UCPD Monitor — USB-PD CC Line Monitoring desktop app.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start:server": "node server/index.js",
+    "start:client": "npm run dev --prefix client",
+    "dev:web": "concurrently -n SERVER,CLIENT -c cyan,green \"npm run start:server\" \"npm run start:client\"",
+    "build:client": "npm run build --prefix client",
+    "electron:dev": "npm run build:client && electron .",
+    "electron:build": "npm run build:client && electron-builder",
+    "start": "npm run build:client && npm run start:server"
+  },
+  "keywords": [
+    "usb-pd",
+    "electron",
+    "stm32"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aso/UCPD-Monitor.git"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "express": "^4.22.1",
+    "serialport": "^13.0.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.stmicro.ucpd-monitor",
+    "productName": "UCPD-Monitor",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**",
+      "server/**",
+      "client/dist/**",
+      "node_modules/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "client/public/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
+  }
+}

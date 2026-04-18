@@ -8,9 +8,9 @@ import { decodePDO, decodeRDO } from '../parsers/pd_parser';
  */
 
 // ── Topology initial shapes ──────────────────────────────────────
-const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, drd: false, altMode: false, discId: null, capabilities: [], snkCaps: [], contract: null, status: null, scdb: null, vdmSeen: false };
+const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, drd: false, drp: false, altMode: false, discId: null, capabilities: [], snkCaps: [], contract: null, status: null, scdb: null, vdmSeen: false };
 const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
-const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, drd: false, altMode: false, discId: null, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
+const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, drd: false, drp: false, altMode: false, discId: null, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
 
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
@@ -20,6 +20,7 @@ export const INITIAL_TOPOLOGY = {
   vbusMv:  null,
   ccPin:   null,
   prSwapPending: false,
+  eprSrcCapsAccum: [],   // accumulated EPR_Source_Capabilities DOs across chunks
 };
 
 /**
@@ -27,7 +28,7 @@ export const INITIAL_TOPOLOGY = {
  * Called both for live WebSocket frames and during file-import replay.
  */
 function applyFrameToTopo(topo, frame) {
-  const { recordType, header, cpd, eventName, dataObjects, parsedPayload, vbusMv, ccPin } = frame;
+  const { recordType, header, cpd, eventName, dataObjects, parsedPayload, vbusMv, ccPin, extendedHeader } = frame;
 
   // ── EVENT records ──
   if (recordType === 'EVENT') {
@@ -86,6 +87,7 @@ function applyFrameToTopo(topo, frame) {
     } else if (typeName === 'Source_Capabilities' && isSrcDir) {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i));
       const drd  = !!(caps[0]?.dualRoleData);
+      const drp  = !!(caps[0]?.dualRolePower);
       if (next.prSwapPending) {
         // PR Swap completed: old sink is now the new source
         const prevSrc = { ...next.source };
@@ -95,6 +97,7 @@ function applyFrameToTopo(topo, frame) {
           pdRevision:   header.specRevision,
           eprActive:    false,
           drd,
+          drp,
           altMode:      false,
           discId:       prevSnk.discId ?? null,
           capabilities: caps,
@@ -109,6 +112,7 @@ function applyFrameToTopo(topo, frame) {
           pdRevision:   prevSrc.pdRevision,
           eprActive:    false,
           drd:          prevSrc.drd,
+          drp:          prevSrc.drp,
           altMode:      prevSrc.altMode ?? false,
           discId:       prevSrc.discId ?? null,
           capabilities: prevSrc.snkCaps,
@@ -121,19 +125,49 @@ function applyFrameToTopo(topo, frame) {
         next.prSwapPending = false;
       } else {
         // Normal: source advertising caps
-        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, capabilities: caps };
+        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, drp, capabilities: caps };
+        next.sink   = { ...next.sink,   connected: true };
+      }
+
+    } else if (typeName === 'EPR_Source_Capabilities' && isSrcDir) {
+      // Chunked extended message — accumulate DOs across chunks.
+      // SPR section is always 7 fixed slots; EPR PDOs start at slot 8 (0-based index 7).
+      const EPR_SPR_SLOTS = 7;
+      const chunkNum = extendedHeader?.chunkNumber ?? 0;
+      const chunkDOs = dataObjects ?? [];
+      const prevAccum = chunkNum === 0 ? [] : (next.eprSrcCapsAccum ?? []);
+      // Pad SPR section to 7 slots only when chunk#1+ has actual EPR DOs to append.
+      // Skipping padding for empty chunk#1 prevents a spurious null from entering
+      // eprSrcCapsAccum when chunk#1 carries no real EPR PDOs (e.g. chunk not present).
+      const paddedAccum = (chunkNum > 0 && chunkDOs.length > 0 && prevAccum.length < EPR_SPR_SLOTS)
+        ? [...prevAccum, ...Array(EPR_SPR_SLOTS - prevAccum.length).fill(0)]
+        : prevAccum;
+      const allDOs = [...paddedAccum, ...chunkDOs];
+      next.eprSrcCapsAccum = allDOs;
+      if (allDOs.length > 0) {
+        // Filter out null-fill placeholder DOs (zero words used to pad the SPR section to
+        // 7 slots so EPR PDO indices remain correct). Use raw-word check (dw !== 0) for
+        // consistency with buildPdoSummary / decodeDataObjects.
+        const caps = allDOs
+          .map((dw, i) => ({ dw, i }))
+          .filter(({ dw }) => (dw & 0x0FFFFFFF) !== 0)
+          .map(({ dw, i }) => decodePDO(dw, i));
+        const drd  = !!(caps[0]?.dualRoleData);
+        const drp  = !!(caps[0]?.dualRolePower);
+        next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, drp, capabilities: caps };
         next.sink   = { ...next.sink,   connected: true };
       }
 
     } else if (typeName === 'Sink_Capabilities') {
       const caps = (dataObjects ?? []).map((dw, i) => decodePDO(dw, i, true));
       const drd  = !!(caps[0]?.dualRoleData);
+      const drp  = !!(caps[0]?.dualRolePower);
       if (isSrcDir) {
         // Source advertising its own sink capabilities (PR_Swap capable device)
-        next.source = { ...next.source, connected: true, snkCaps: caps, drd };
+        next.source = { ...next.source, connected: true, snkCaps: caps, drd, drp };
         next.sink   = { ...next.sink,   connected: true };
       } else {
-        next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, drd, capabilities: caps };
+        next.sink   = { ...next.sink,   connected: true, pdRevision: header.specRevision, drd, drp, capabilities: caps };
         next.source = { ...next.source, connected: true };
       }
 
@@ -211,8 +245,10 @@ function applyFrameToTopo(topo, frame) {
           const idHdr   = dataObjects[1];
           const altMode = !!((idHdr >>> 26) & 0x1);
           // Build discId from ID Header / Cert Stat / Product VDOs
-          const vidNum  = idHdr & 0xFFFF;
-          const vidHex  = `0x${vidNum.toString(16).toUpperCase().padStart(4, '0')}`;
+          const vidNum   = idHdr & 0xFFFF;
+          const vidHex   = `0x${vidNum.toString(16).toUpperCase().padStart(4, '0')}`;
+          const dfpPType = (idHdr >>> 23) & 0x7;  // B25:23 — Table 6.37 Product Type (DFP)
+          const ufpPType = (idHdr >>> 27) & 0x7;  // B29:27 — Table 6.37 Product Type (UFP)
           let pid = null, bcdDevice = null, xid = null;
           if (dataObjects.length >= 3) {
             xid = `0x${((dataObjects[2]) >>> 0).toString(16).toUpperCase().padStart(8, '0')}`;
@@ -222,7 +258,7 @@ function applyFrameToTopo(topo, frame) {
             pid       = `0x${((prodVdo >>> 16) & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
             bcdDevice = `0x${(prodVdo & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
           }
-          const discId = { vid: vidHex, pid, bcdDevice, xid };
+          const discId = { vid: vidHex, pid, bcdDevice, xid, dfpPType, ufpPType };
           if (isSrcDir)
             next.source = { ...next.source, altMode, discId };
           else if (isSnkDir)
@@ -308,7 +344,12 @@ export const useAppStore = create((set, get) => ({
   /** Replay all frames from scratch to rebuild topology (called after file import). */
   replayFrames: (frames) => {
     let topo = { ...INITIAL_TOPOLOGY };
-    for (const f of frames) topo = applyFrameToTopo(topo, f);
+    for (const f of frames) {
+      // File-replay semantics: DETACHED does NOT clear topology (user wants to see last state).
+      // Only ATTACHED resets the device state (a new connection begins fresh).
+      if (f.recordType === 'EVENT' && f.eventName === 'DETACHED') continue;
+      topo = applyFrameToTopo(topo, f);
+    }
     set({ topology: topo });
   },
 

@@ -229,6 +229,159 @@ export function parseExtendedMsgHeader(word: number): ExtendedMessageHeader {
   };
 }
 
+// ---------- Spec-constraint violation detector ----------
+
+/**
+ * Collect USB PD Rev 3.2 spec-constraint violations from a parsed message.
+ *
+ * Returns an array of human-readable strings (each starting with '⚠'), or an
+ * empty array when no violations are found.  The violations are based on
+ * normative "Shall" requirements from the USB PD Rev 3.2 v1.0 specification.
+ *
+ * @param typeName      Decoded message type name (from MessageHeader.typeName)
+ * @param header        Parsed MessageHeader
+ * @param dataObjects   Decoded uint32 data objects
+ * @param opts          Optional context (e.g. chunkPdoOffset for EPR chunks)
+ */
+export function collectParseViolations(
+  typeName: string,
+  header: { numDataObjects: number; extended: boolean; isControl: boolean },
+  dataObjects: readonly number[],
+  opts: { chunkPdoOffset?: number } = {},
+): string[] {
+  const violations: string[] = [];
+
+  // ── 1. NDO mismatch ──────────────────────────────────────────────────────
+  // For non-extended data messages, the header's NDO field declares how many
+  // 4-byte DOs are in the payload.  Fewer actual DOs means the frame is
+  // truncated.  (Table 6.1 — "Number of Data Objects")
+  if (!header.extended && !header.isControl && dataObjects.length < header.numDataObjects) {
+    violations.push(
+      `⚠ NDO mismatch: header declares ${header.numDataObjects} DOs but only ` +
+      `${dataObjects.length} found — frame may be truncated (Table 6.1)`,
+    );
+  }
+
+  // ── 2. Source_Capabilities PDO#1 must be vSafe5V Fixed Supply ────────────
+  // §6.4.1.2.2: "The first PDO Shall always be a Fixed Supply PDO for vSafe5V."
+  // §6.4.1.3.1: Same requirement applies to EPR_Source_Capabilities chunk 0.
+  const isSrcCaps = typeName === 'Source_Capabilities' || typeName === 'EPR_Source_Capabilities';
+  const isSinkCaps = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
+  if ((isSrcCaps || isSinkCaps) && dataObjects.length >= 1 && (opts.chunkPdoOffset ?? 0) === 0) {
+    const pdo1     = dataObjects[0]!;
+    const pdoType  = (pdo1 >>> 30) & 0x3;
+    if (pdoType !== 0b00) {
+      violations.push(
+        `⚠ PDO#1 type=${pdoType.toString(2).padStart(2,'0')}b — Shall be Fixed Supply (vSafe5V) (§6.4.1.2.2)`,
+      );
+    } else {
+      // Fixed Supply: vMv encoded in bits 19..10 as 50 mV units
+      const vMv = ((pdo1 >>> 10) & 0x3FF) * 50;
+      if (vMv !== 5000) {
+        violations.push(
+          `⚠ PDO#1 voltage ${vMv} mV ≠ 5000 mV — Shall be vSafe5V Fixed Supply (§6.4.1.2.2)`,
+        );
+      }
+    }
+  }
+
+  // ── 3. RDO Object Position Shall not be zero ─────────────────────────────
+  // §6.4.2: "The Object Position Shall not be set to zero."
+  if ((typeName === 'Request' || typeName === 'EPR_Request') && dataObjects.length >= 1) {
+    const objPos = (dataObjects[0]! >>> 28) & 0xF;
+    if (objPos === 0) {
+      violations.push(
+        `⚠ RDO Object Position = 0 — Shall not be zero (§6.4.2)`,
+      );
+    }
+  }
+
+  // ── 4. Reserved APDO subtype 0b11 ────────────────────────────────────────
+  // §6.4.1.2.5 / Table 6.7: APDO (pdoType=11b) subtypes 00b=PPS, 01b=EPR AVS,
+  // 10b=SPR AVS.  0b11 is Reserved and Shall not be used.
+  if (isSrcCaps || isSinkCaps) {
+    dataObjects.forEach((dw, i) => {
+      const pdoType = (dw >>> 30) & 0x3;
+      if (pdoType === 0b11) {
+        const apdoType = (dw >>> 28) & 0x3;
+        if (apdoType === 0b11) {
+          violations.push(
+            `⚠ PDO#${i + 1 + (opts.chunkPdoOffset ?? 0)}: APDO subtype 11b is Reserved — Shall not be used (§6.4.1.2.5)`,
+          );
+        }
+      }
+    });
+  }
+
+  // ── 5. EPR AVS voltage range constraints ─────────────────────────────────
+  // §6.4.1.2.5.2 Table 6.14:
+  //   - vMin field Shall be ≥ 15 V (100 mV units in bits 15..8)
+  //   - vMax field Shall be ≤ 48 V (100 mV units in bits 24..17 — note: NOT 25..17; B16 is Rsvd)
+  //   - vMax Shall be > vMin (otherwise range is degenerate)
+  if (typeName === 'EPR_Source_Capabilities' || typeName === 'EPR_Sink_Capabilities') {
+    dataObjects.forEach((dw, i) => {
+      const pdoType  = (dw >>> 30) & 0x3;
+      const apdoType = (dw >>> 28) & 0x3;
+      if (pdoType === 0b11 && apdoType === 0b01) {
+        // EPR AVS APDO: Table 6.14
+        const vMaxMv = ((dw >>> 17) & 0x1FF) * 100;
+        const vMinMv = ((dw >>> 8)  & 0xFF)  * 100;
+        const pdoIdx = i + 1 + (opts.chunkPdoOffset ?? 0);
+        if (vMinMv < 15000) {
+          violations.push(
+            `⚠ EPR AVS PDO#${pdoIdx}: vMin ${vMinMv} mV < 15000 mV — Shall be ≥ 15 V (§6.4.1.2.5.2 Table 6.14)`,
+          );
+        }
+        if (vMaxMv > 48000) {
+          violations.push(
+            `⚠ EPR AVS PDO#${pdoIdx}: vMax ${vMaxMv} mV > 48000 mV — Shall be ≤ 48 V (§6.4.1.2.5.2 Table 6.14)`,
+          );
+        }
+        if (vMinMv > 0 && vMaxMv <= vMinMv) {
+          violations.push(
+            `⚠ EPR AVS PDO#${pdoIdx}: vMax ${vMaxMv} mV ≤ vMin ${vMinMv} mV — invalid voltage range`,
+          );
+        }
+      }
+    });
+  }
+
+  // ── 6. EPR AVS APDO — B16 (Reserved) Shall be zero ──────────────────────
+  // §6.4.1.2.5.2 Table 6.14 B16: "Reserved — Shall be zero"
+  if (typeName === 'EPR_Source_Capabilities' || typeName === 'EPR_Sink_Capabilities') {
+    dataObjects.forEach((dw, i) => {
+      const pdoType  = (dw >>> 30) & 0x3;
+      const apdoType = (dw >>> 28) & 0x3;
+      if (pdoType === 0b11 && apdoType === 0b01) {
+        if ((dw >>> 16) & 0x1) {
+          violations.push(
+            `⚠ EPR AVS PDO#${i + 1 + (opts.chunkPdoOffset ?? 0)}: B16 = 1 — Reserved, Shall be zero (§6.4.1.2.5.2 Table 6.14)`,
+          );
+        }
+      }
+    });
+  }
+
+  // ── 7. SPR AVS APDO — B25:20 (Reserved) Shall be zero ───────────────────
+  // §6.4.1.2.5.3 Table 6.16 B25:20: "Reserved — Shall be zero"
+  if (typeName === 'Source_Capabilities' || typeName === 'Sink_Capabilities') {
+    dataObjects.forEach((dw, i) => {
+      const pdoType  = (dw >>> 30) & 0x3;
+      const apdoType = (dw >>> 28) & 0x3;
+      if (pdoType === 0b11 && apdoType === 0b10) {
+        const rsvd = (dw >>> 20) & 0x3F;
+        if (rsvd !== 0) {
+          violations.push(
+            `⚠ SPR AVS PDO#${i + 1 + (opts.chunkPdoOffset ?? 0)}: B25:20 = 0x${rsvd.toString(16)} — Reserved, Shall be zero (§6.4.1.2.5.3 Table 6.16)`,
+          );
+        }
+      }
+    });
+  }
+
+  return violations;
+}
+
 // ---------- Frame parser ----------
 
 /**
@@ -275,6 +428,26 @@ export function parseRawFrame(hexStr: string, source: string): PdMessage | null 
       dataObjects.push(dw >>> 0); // keep as unsigned
     }
 
+    // EPR chunked extended messages: chunk 0 is always MaxExtendedMsgLen=26 bytes of data.
+    // Chunk 1+ must skip the 2 leading continuation bytes (they complete the null 7th PDO from
+    // chunk 0) before real EPR PDOs start.
+    const EPR_CHUNK0_BYTES = 26;
+    const EPR_CHUNK1_SKIP  = EPR_CHUNK0_BYTES % 4;     // = 2
+    const EPR_SPR_SLOTS    = Math.ceil(EPR_CHUNK0_BYTES / 4); // = 7
+    let chunkPdoOffset: number | undefined;
+    if (header.typeName === 'EPR_Source_Capabilities' || header.typeName === 'EPR_Sink_Capabilities') {
+      const chunkNum = extendedHeader?.chunkNumber ?? 0;
+      chunkPdoOffset = chunkNum === 0 ? 0 : EPR_SPR_SLOTS;
+      if (chunkNum > 0 && EPR_CHUNK1_SKIP > 0) {
+        dataObjects.splice(0, dataObjects.length);
+        for (let j = doOffset + EPR_CHUNK1_SKIP; j + 3 < bytes.length; j += 4) {
+          dataObjects.push(
+            (bytes[j]! | (bytes[j+1]!<<8) | (bytes[j+2]!<<16) | (bytes[j+3]!<<24)) >>> 0
+          );
+        }
+      }
+    }
+
     return {
       ts: Date.now(),
       source,
@@ -282,6 +455,7 @@ export function parseRawFrame(hexStr: string, source: string): PdMessage | null 
       header,
       extendedHeader,
       dataObjects,
+      ...(chunkPdoOffset !== undefined ? { chunkPdoOffset } : {}),
       parsedPayload: (header.typeName === 'Source_Capabilities_Extended' && bytes.length >= doOffset + 25)
         ? decodeSourceCapsExtended(bytes.slice(doOffset, doOffset + 25))
         : (header.typeName === 'Status' && bytes.length >= doOffset + 7)
@@ -291,7 +465,11 @@ export function parseRawFrame(hexStr: string, source: string): PdMessage | null 
             : (header.typeName === 'Sink_Capabilities_Extended' && bytes.length >= doOffset + 21)
               ? decodeSinkCapsExtended(bytes.slice(doOffset))
               : null,
-      pdoSummary: (header.typeName === 'Source_Info' && dataObjects.length)
+      pdoSummary: (header.typeName === 'Source_Capabilities' || header.typeName === 'Sink_Capabilities'
+          || header.typeName === 'EPR_Source_Capabilities' || header.typeName === 'EPR_Sink_Capabilities')
+          && dataObjects.length
+        ? buildPdoSummary(header.typeName, dataObjects, chunkPdoOffset ?? 0)
+        : (header.typeName === 'Source_Info' && dataObjects.length)
         ? decodeSIDO(dataObjects[0]!).label
         : (header.typeName === 'BIST' && dataObjects.length)
           ? (() => {
@@ -326,6 +504,11 @@ export function parseRawFrame(hexStr: string, source: string): PdMessage | null 
                     return `Rev ${(dw>>>28)&0xF}.${(dw>>>24)&0xF}  Ver ${(dw>>>12)&0xF}.${(dw>>>8)&0xF}`;
                   })()
                 : undefined,
+      parseViolations: (() => {
+        const v = collectParseViolations(header.typeName, header, dataObjects,
+          { chunkPdoOffset });
+        return v.length ? v : undefined;
+      })(),
     };
   } catch (e) {
     console.warn('[pd_parser] Parse error:', (e as Error).message, hexStr);
@@ -357,11 +540,17 @@ function fmtA(ma: number): string {
  * @param {number[]} dataObjects Array of raw uint32 PDO words
  * @returns {string}
  */
-export function buildPdoSummary(typeName: string, dataObjects: number[]): string {
+export function buildPdoSummary(typeName: string, dataObjects: number[], indexOffset = 0): string {
   if (!dataObjects?.length) return '';
   const isSink = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
-  return dataObjects.map((dw, i) => {
-    const pdo = decodePDO(dw, i, isSink);
+  const isEpr = typeName === 'EPR_Source_Capabilities' || typeName === 'EPR_Sink_Capabilities';
+  // For EPR types, filter DOs where all value/voltage/current bits are zero.
+  // (dw & 0x0FFFFFFF) === 0 covers:
+  //   0x00000000 — null-fill Fixed placeholder
+  //   0xD0000000 — APDO_AVS type bits only, all value fields zero (charger bug)
+  //   0xC0000000 — APDO_PPS type bits only, all value fields zero
+  return dataObjects.map((dw, i) => ({ dw, i })).filter(({ dw }) => !(isEpr && (dw & 0x0FFFFFFF) === 0)).map(({ dw, i }) => {
+    const pdo = decodePDO(dw, i + indexOffset, isSink);
     const n   = pdo.index;
     switch (pdo.pdoType) {
       case 'Fixed':
@@ -734,20 +923,36 @@ const VDM_CMD_TYPE: Record<number, string> = ['REQ', 'ACK', 'NAK', 'BUSY'];
 
 /** Well-known SVIDs */
 const VDM_SVID_NAMES: Record<number, string> = {
+  // ── 標準規格 ──────────────────────────────────────────────
   0xFF00: 'PD SID',    // USB PD Standard ID (Table 6.32, §6.4.4.2.1)
   0xFF01: 'DP',        // VESA DisplayPort Alt Mode
-  0x8087: 'TBT3',     // Intel Thunderbolt 3
+  0xFF02: 'VESA Ext',  // VESA 拡張
+  // ── Intel / Thunderbolt ───────────────────────────────────
+  0x8087: 'TBT',       // Intel Thunderbolt (TB3/USB4)
+  0x8086: 'Intel',     // Intel 汎用 (USB4 / Alt Mode 補助)
+  // ── プラットフォームベンダ ────────────────────────────────
+  0x05AC: 'Apple',
+  0x04E8: 'Samsung',   // DeX 等
+  0x0FCE: 'Sony',      // Xperia 系
+  0x12D1: 'Huawei',
+  0x22B8: 'Motorola',
+  // ── PC / アクセサリベンダ ─────────────────────────────────
+  0x10DE: 'NVIDIA',
+  0x1002: 'AMD',
+  0x17EF: 'Lenovo',
+  0x17AA: 'Lenovo',    // 旧 ID
+  0x103C: 'HP',
+  // ── チップ / その他 ───────────────────────────────────────
   0x04B4: 'Cypress',
   0x18D1: 'Google',
   0x2109: 'VIA Labs',
   0x04CC: 'OPPO/OnePlus',
+  0x1D6B: 'Linux Fnd', // Linux Foundation (Gadget/テスト)
 };
 
 function fmtSvid(svid: number): string {
   const name = VDM_SVID_NAMES[svid];
-  return name
-    ? `${name} (0x${svid.toString(16).toUpperCase().padStart(4, '0')})`
-    : `0x${svid.toString(16).toUpperCase().padStart(4, '0')}`;
+  return name ?? `0x${svid.toString(16).toUpperCase().padStart(4, '0')}`;
 }
 
 /**
@@ -1014,11 +1219,15 @@ function decodeDiscoverIdentityVDOs(vdos: number[]): object[] {
     }
 
     // DFP VDO (Table 6.41) — DRD slot i=5, or non-DRD DFP-only product
+    // ufpPType 1/2 (Hub/Peripheral) are caught by isUfpSlot above;
+    // 3/4/6 (cables/VPD) by their own handlers; 0/5/7 (Undefined/Rsvd) fall through here.
+    // Therefore dropping the ufpPType === 0 guard is safe.
     const dfpPType  = (idHdrDw >>> 23) & 0x7;
-    const isDfpSlot = (isDrd && i === 5) || (!isDrd && i === 3 && dfpPType >= 1 && dfpPType <= 3 && ufpPType === 0);
+    const isDfpSlot = (isDrd && i === 5) || (!isDrd && i === 3 && dfpPType >= 1 && dfpPType <= 3);
     if (isDfpSlot) {
       const vdoVer  = (dw >>> 29) & 0x7;
-      const hostCap = (dw >>> 24) & 0x7;
+      // Table 6.41: B25=USB4, B24=USB3.2, B23=USB2.0 → shift by 23, not 24
+      const hostCap = (dw >>> 23) & 0x7;
       const portNum = dw          & 0x1F;
       const hostCapStr = [
         hostCap & 1 ? 'USB2.0' : null,
@@ -1151,7 +1360,7 @@ function decodeDPStatusVDO(dw: number): string {
  * @param {string}   [srcPdoType] Optional resolved source PDO type for RDO decoding
  * @returns {object[]|null}       Decoded children, or null if not expandable
  */
-export function decodeDataObjects(typeName: string, dataObjects: number[], srcPdoType?: string): TreeRow[] | null {
+export function decodeDataObjects(typeName: string, dataObjects: number[], srcPdoType?: string, indexOffset = 0): TreeRow[] | null {
   if (!dataObjects || dataObjects.length === 0) return null;
 
   switch (typeName) {
@@ -1160,7 +1369,11 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
     case 'EPR_Source_Capabilities':
     case 'EPR_Sink_Capabilities': {
       const isSinkCap = typeName === 'Sink_Capabilities' || typeName === 'EPR_Sink_Capabilities';
-      return dataObjects.map((dw, i) => decodePDO(dw, i, isSinkCap));
+      const isEprCap = typeName === 'EPR_Source_Capabilities' || typeName === 'EPR_Sink_Capabilities';
+      return dataObjects
+        .map((dw, i) => ({ dw, i }))
+        .filter(({ dw }) => !(isEprCap && (dw & 0x0FFFFFFF) === 0))
+        .map(({ dw, i }) => decodePDO(dw, i + indexOffset, isSinkCap));
     }
 
     case 'Request':
@@ -1229,7 +1442,10 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
         const vendorData = vdmHdr & 0x7FFF;
         return [
           {
-            label: `VDM Header — SVID:${fmtSvid(svid)} [Unstructured] VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`,
+            label: `VDM Unstructured — ${fmtSvid(svid)}  VendorData:0x${vendorData.toString(16).toUpperCase().padStart(4, '0')}`,
+            // SVID hex for reference
+            raw: `0x${(svid).toString(16).toUpperCase().padStart(4, '0')}`,
+            _overrideRaw: true,
             raw: `0x${(vdmHdr >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
           },
           ...dataObjects.slice(1).map((dw, i) => ({
@@ -1284,7 +1500,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
       }
 
       const headerLabel =
-        `VDM Header — SVID:${fmtSvid(svid)} ${cmdName} [${cmdTypeName}] ${verStr}${objPosStr}${specViolation}`;
+        `${cmdName} [${cmdTypeName}] — ${fmtSvid(svid)}  ${verStr}${objPosStr}${specViolation}`;
 
       const vdos = dataObjects.slice(1);
 
@@ -1901,6 +2117,18 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
   const frames: PdFrame[] = [];
   const errors: string[]  = [];
 
+  // Track accumulated PDO count across chunked non-EPR caps messages
+  // key = `${dirName}_${typeName}`, value = running DO count from previous chunks
+  const chunkPdoAccum = new Map<string, number>();
+
+  // EPR_Source/Sink_Capabilities: USB PD MaxExtendedMsgLen = 26 bytes per chunk (fixed by spec).
+  // Chunk 0 always carries 26 data bytes = 6 complete PDOs (24B) + 2 trailing bytes (start of the
+  // null 7th PDO that pads the SPR section to 7 slots). Chunk 1+ therefore starts with 2 bytes
+  // that complete that null PDO and must be skipped before parsing real EPR PDOs.
+  const EPR_CHUNK0_BYTES = 26;                        // MaxExtendedMsgLen per USB PD Rev 3.2 spec
+  const EPR_CHUNK1_SKIP  = EPR_CHUNK0_BYTES % 4;     // = 2 bytes to skip at start of chunk 1+
+  const EPR_SPR_SLOTS    = Math.ceil(EPR_CHUNK0_BYTES / 4); // = 7 (PDO index offset for EPR PDOs)
+
   let offset = 0;
 
   while (offset <= total - CPD_FIXED_HDR) {
@@ -2030,12 +2258,44 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
       if (header.typeName === 'Source_Capabilities' || header.typeName === 'Sink_Capabilities'
           || header.typeName === 'EPR_Source_Capabilities' || header.typeName === 'EPR_Sink_Capabilities') {
         if (dataObjects.length > 0) {
-          frame['pdoSummary'] = buildPdoSummary(header.typeName, dataObjects);
-          // EPR marker: any fixed PDO has eprModeCapable set
-          frame['eprCapable'] = dataObjects.some((dw) => {
-            const pdoType = (dw >>> 30) & 0x3;
-            return pdoType === 0b00 && !!(dw & (1 << 23));
-          });
+          // Compute chunk PDO index offset for chunked caps messages.
+          const capKey = `${(frame.cpd as { dirName?: string })?.dirName ?? ''}_${header.typeName}`;
+          const chunkNum = extendedHeader?.chunkNumber ?? 0;
+          let pdoOffset: number;
+          if (header.typeName === 'EPR_Source_Capabilities' || header.typeName === 'EPR_Sink_Capabilities') {
+            // Chunk 0 → PDOs start at index 0; chunk 1+ → skip EPR_CHUNK1_SKIP leading bytes
+            // (they complete the straddled null PDO from chunk 0) and PDOs start at EPR_SPR_SLOTS.
+            pdoOffset = chunkNum === 0 ? 0 : EPR_SPR_SLOTS;
+            if (chunkNum > 0 && EPR_CHUNK1_SKIP > 0) {
+              dataObjects.splice(0, dataObjects.length);
+              for (let j = doOffset + EPR_CHUNK1_SKIP; j + 3 < payload.length; j += 4) {
+                dataObjects.push(
+                  (payload[j]! | (payload[j+1]!<<8) | (payload[j+2]!<<16) | (payload[j+3]!<<24)) >>> 0
+                );
+              }
+            }
+          } else {
+            if (chunkNum === 0) chunkPdoAccum.set(capKey, 0);
+            pdoOffset = chunkPdoAccum.get(capKey) ?? 0;
+            chunkPdoAccum.set(capKey, pdoOffset + dataObjects.length);
+          }
+          frame['chunkPdoOffset'] = pdoOffset;
+
+          frame['pdoSummary'] = buildPdoSummary(header.typeName, dataObjects, pdoOffset);
+          if (header.typeName === 'Source_Capabilities' || header.typeName === 'EPR_Source_Capabilities') {
+            // EPR_RDY marker: any fixed Source PDO has eprModeCapable (bit 23) set
+            frame['eprCapable'] = dataObjects.some((dw) => {
+              const pdoType = (dw >>> 30) & 0x3;
+              return pdoType === 0b00 && !!(dw & (1 << 23));
+            });
+          } else {
+            // FRS marker: Sink PDO#1 bits 24..23 (Fast Role Swap current) > 0
+            const pdo1 = dataObjects[0]!;
+            const pdoType = (pdo1 >>> 30) & 0x3;
+            if (pdoType === 0b00) {
+              frame['frsCapable'] = ((pdo1 >>> 23) & 0x3) > 0;
+            }
+          }
         } else if (extendedHeader) {
           // Chunk request (RequestChunk=1, DataSize=0) or empty chunked frame
           const chunkInfo = extendedHeader.requestChunk
@@ -2044,7 +2304,8 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
           frame['pdoSummary'] = chunkInfo;
         }
       } else if ((header.typeName === 'Request' || header.typeName === 'EPR_Request') && dataObjects.length) {
-        frame['pdoSummary'] = buildRdoSummary(dataObjects[0]!);
+        // EPR_Request DO[0] is always AVS RDO format (USB PD Rev 3.2 Table 6.38)
+        frame['pdoSummary'] = buildRdoSummary(dataObjects[0]!, header.typeName === 'EPR_Request' ? 'APDO_AVS' : 'Fixed');
       } else if (header.typeName === 'EPR_Mode' && dataObjects.length) {
         const EPR_ACTION: Record<number, string> = {
           0x01: 'Enter', 0x02: 'Enter Acknowledged', 0x03: 'Enter Succeeded',
@@ -2110,6 +2371,12 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
           frame['pdoSummary'] = `${chunks}  ${extendedHeader.dataSize}B`;
         }
       }
+      // Collect spec-constraint violations for PD_MSG frames
+      const violations = collectParseViolations(
+        header.typeName, header, dataObjects as number[],
+        { chunkPdoOffset: frame['chunkPdoOffset'] as number | undefined },
+      );
+      if (violations.length) frame['parseViolations'] = violations;
     } else {
       frame['raw'] = Array.from(payload)
         .map((b) => b.toString(16).padStart(2, '0').toUpperCase())

@@ -43,3 +43,17 @@
   word-break: break-all;
   line-height: 1.6;
 }
+
+.lineError {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+  color: #ff6b6b;
+}
+
+.lineWarn {
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+  color: #ffb74d;
+}

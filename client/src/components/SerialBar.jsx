@@ -141,16 +141,6 @@ export default function SerialBar({ sendMessage }) {
         }
       </select>
 
-      {/* Device badge for the selected port */}
-      {(() => {
-        if (isConnected) return null;
-        const sel = ports.find((p) => p.path === selPort);
-        const label = sel ? knownLabel(sel) : null;
-        return label
-          ? <span className={styles.deviceBadge} title={`VID:${sel.vendorId}  PID:${sel.productId}`}>★ {label}</span>
-          : null;
-      })()}
-
       {/* Refresh button */}
       <button
         className={styles.refreshBtn}

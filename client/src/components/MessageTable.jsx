@@ -85,6 +85,9 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
     details.push(`${pdo.isSink ? 'Op' : 'Max'}:${(pdo.iMa/1000).toFixed(2)} A`);
   } else if (pdo.pdoType === 'APDO_PPS') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
+    details.push(`Max:${(pdo.iMa/1000).toFixed(2)} A`);
+  } else if (pdo.pdoType === 'APDO_AVS') {
+    details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${pdo.pdpW} W`);
   } else if (pdo.pdoType === 'APDO_SPR_AVS') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
@@ -276,15 +279,15 @@ const MessageRow = memo(function MessageRow({
   const children = useMemo(() => {
     if (msg.parsedPayload?.length) return msg.parsedPayload;
     if (!header || !msg.dataObjects?.length) return null;
-    return decodeDataObjects(header.typeName, msg.dataObjects);
-  }, [header, msg.dataObjects, msg.parsedPayload]);
+    return decodeDataObjects(header.typeName, msg.dataObjects, undefined, msg.chunkPdoOffset ?? 0);
+  }, [header, msg.dataObjects, msg.parsedPayload, msg.chunkPdoOffset]);
 
   const hasChildren = children && children.length > 0;
 
   const childrenTyped = useMemo(() => {
     if (!isRequest || !msg.dataObjects?.length || !resolvedSourcePdo) return children;
-    return decodeDataObjects(header.typeName, msg.dataObjects, resolvedSourcePdo.pdo.pdoType);
-  }, [isRequest, header, msg.dataObjects, resolvedSourcePdo, children]);
+    return decodeDataObjects(header.typeName, msg.dataObjects, resolvedSourcePdo.pdo.pdoType, msg.chunkPdoOffset ?? 0);
+  }, [isRequest, header, msg.dataObjects, resolvedSourcePdo, children, msg.chunkPdoOffset]);
 
   // Group VDM Discover Identity / SVIDs / Modes children into sections for 2-level tree.
   // Each section: { hdr: { label, raw, section:true }, fields: [{ label, value }, ...] }
@@ -358,13 +361,16 @@ const MessageRow = memo(function MessageRow({
             </span>
           )}
         </td>
-        <td style={{ color: sopColor }}>{cpd?.sopQualName ?? '—'}</td>
+        <td style={{ color: sopColor }}>{(isDebug || isEvent) ? '' : (cpd?.sopQualName ?? '—')}</td>
         <td>{header?.specRevision ?? ''}</td>
         <td>{header?.msgId ?? ''}</td>
         <td className={isDebug || isEvent ? styles.special : header?.extended ? styles.ext : header?.isControl ? styles.ctrl : styles.data}>
           {isDebug ? 'ASCII_LOG' : isEvent ? (msg.eventName ?? 'EVENT') : header?.typeName ?? '—'}
+          {msg.parseViolations?.length > 0 && (
+            <span title={msg.parseViolations.join('\n')} style={{ marginLeft: 5, color: '#ffb74d', fontSize: 13, cursor: 'help' }}>⚠</span>
+          )}
         </td>
-        <td>{header?.numDataObjects ?? ''}</td>
+        <td>{(header?.numDataObjects ?? 0) > 0 ? header.numDataObjects : ''}</td>
         <td className={isDebug ? styles.ascii : ((msg.pdoSummary || (header?.typeName === 'Vendor_Defined' && children?.[0]?.label)) && !showRaw) ? styles.pdoSummary : styles.raw}>
           {(msg.pdoSummary && !showRaw)
             ? <>
@@ -378,13 +384,17 @@ const MessageRow = memo(function MessageRow({
                     {' → '}<span style={{ color: PDO_TYPE_COLORS[resolvedSourcePdo.pdo.pdoType] ?? '#aaa' }}>{resolvedSourcePdo.pdo.label}</span>
                   </span>
                 )}
-                {msg.eprCapable && <span className={styles.eprBadge}>EPR</span>}
+                {msg.eprCapable && <span className={styles.eprBadge}>EPR_RDY</span>}
+                {msg.frsCapable && <span className={styles.fsrBadge}>FSR</span>}
               </>
             : (header?.typeName === 'Vendor_Defined' && children?.[0]?.label && !showRaw)
               ? <span className={styles.pdoSummaryText}>{children[0].label}</span>
               : (msg.raw ? `DATA:${msg.raw}` : '')}
         </td>
       </tr>
+      {expanded && msg.parseViolations?.length > 0 && msg.parseViolations.map((v, vi) => (
+        <PdoRow key={`v${vi}`} child={{ label: v, raw: '' }} isParentSelected={isSelected} />
+      ))}
       {expanded && hasChildren && (
         vdmGroups
           ? vdmGroups.map((grp, gi) => (
@@ -434,6 +444,57 @@ function formatMsgForCopy(msg) {
 const ROW_H        = 28;  // collapsed message row
 const CHILD_ROW_H  = 24;  // PDO / RDO child row
 
+// ── USB PD spec violation guide entries ───────────────────────────────────
+// Each entry: [keyword shown in ⚠ message, spec ref, plain-English explanation]
+const VIOLATION_GUIDE = [
+  ['NDO mismatch',           'Table 6.1',          'The Number of Data Objects field in the message header declares more 4-byte DOs than are actually present in the payload — the frame appears truncated.'],
+  ['PDO#1 type=…b',          '§6.4.1.2.2',         'The first PDO in Source_Capabilities or Sink_Capabilities must always be a Fixed Supply PDO. Other PDO types (Battery, Variable, APDO) are invalid at position 1.'],
+  ['PDO#1 voltage … ≠ 5000', '§6.4.1.2.2',         'PDO#1 is a Fixed Supply but its voltage is not 5000 mV (vSafe5V). The spec requires the first PDO to be the 5 V safe operating voltage.'],
+  ['RDO Object Position = 0','§6.4.2',             'The Object Position field of the Request Data Object (bits 31:28) is zero, which is reserved. Valid positions start at 1 and correspond to a PDO in the source\'s capability list.'],
+  ['APDO subtype 11b',       '§6.4.1.2.5 Table 6.7','APDO subtype 0b11 is reserved. Valid APDO subtypes are: 00b = PPS, 01b = EPR AVS, 10b = SPR AVS.'],
+  ['EPR AVS … vMin … < 15000','§6.4.1.2.5.2 Table 6.14','EPR AVS APDO: the minimum voltage field (bits 15:8, unit 100 mV) encodes a value below 15 V.  The spec requires vMin ≥ 15 V for EPR AVS.'],
+  ['EPR AVS … vMax … > 48000','§6.4.1.2.5.2 Table 6.14','EPR AVS APDO: the maximum voltage field (bits 24:17, unit 100 mV) encodes a value above 48 V.  The spec requires vMax ≤ 48 V for EPR AVS.'],
+  ['vMax … ≤ vMin',          '§6.4.1.2.5.2 Table 6.14','EPR AVS APDO: the maximum voltage is less than or equal to the minimum voltage, making the voltage range degenerate (empty or zero-width).'],
+  ['B16 = 1',                '§6.4.1.2.5.2 Table 6.14','EPR AVS APDO bit 16 is reserved and must be zero.  A value of 1 indicates a non-compliant or corrupted PDO.'],
+  ['B25:20 = 0x',            '§6.4.1.2.5.3 Table 6.16','SPR AVS APDO bits 25:20 are reserved and must all be zero.  Non-zero values indicate a non-compliant or corrupted PDO.'],
+];
+
+/** Floating guide explaining what each ⚠ violation keyword means. */
+function ViolationGuide({ onClose }) {
+  return (
+    <div className={styles.violationGuide} role="dialog" aria-label="Parse violation guide">
+      <h3>
+        <span>⚠ Parse Violation Guide — USB PD Rev 3.2</span>
+        <button onClick={onClose} title="Close" aria-label="Close guide">✕</button>
+      </h3>
+      <p style={{ margin: '0 0 8px', color: '#888', lineHeight: 1.5 }}>
+        When a message violates a normative requirement of the USB PD specification,
+        an <span style={{ color: '#ffb74d' }}>⚠</span> badge appears in the Type column.
+        Expand the row (click it) to see the full violation text as an amber child row.
+        The table below maps each kind of violation to its spec section and meaning.
+      </p>
+      <table className={styles.violationGuideTable}>
+        <thead>
+          <tr>
+            <th>Keyword in ⚠ message</th>
+            <th>Spec ref</th>
+            <th>Explanation</th>
+          </tr>
+        </thead>
+        <tbody>
+          {VIOLATION_GUIDE.map(([kw, ref, desc]) => (
+            <tr key={kw}>
+              <td>{kw}</td>
+              <td>{ref}</td>
+              <td>{desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function MessageTable() {
   const messages      = useAppStore((s) => s.messages);
   const clearMessages = useAppStore((s) => s.clearMessages);
@@ -444,6 +505,7 @@ export default function MessageTable() {
   const [selectedIds,    setSelectedIds]    = useState(new Set());
   const [anchorId,       setAnchorId]       = useState(null);
   const [contextMenu,    setContextMenu]    = useState(null);
+  const [showGuide,      setShowGuide]      = useState(false);
   // expanded state lifted here so rows survive virtual-scroll unmount
   const [expandedIds,    setExpandedIds]    = useState(new Set());
 
@@ -451,9 +513,9 @@ export default function MessageTable() {
 
   // ── Resizable columns ──────────────────────────────────────────
   // Widths in px; null = auto (last column fills remaining space).
-  const DEFAULT_WIDTHS  = [72, 104, 152, 68, 38, 54, 200, 38, null];
+  const DEFAULT_WIDTHS  = [72, 104, 110, 68, 38, 54, 240, 38, null];
   // Minimum drag width per column (last column enforced via table min-width)
-  const MIN_COL_WIDTHS  = [44, 76,  100, 44, 28, 40, 80,  28, 80];
+  const MIN_COL_WIDTHS  = [44, 76,   72, 44, 28, 40,  80, 28, 80];
   const [colWidths, setColWidths] = useState(DEFAULT_WIDTHS);
 
   // min-width of the whole table = sum of all per-column minimums (keeps last col visible)
@@ -609,8 +671,17 @@ export default function MessageTable() {
     <section className={styles.wrapper}>
       <header className={styles.header}>
         <span>Message Log ({messages.length})</span>
-        <button onClick={clearMessages} className={styles.clearBtn}>Clear</button>
+        <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <button
+            onClick={() => setShowGuide((v) => !v)}
+            className={styles.violationGuideBtn}
+            title="Show parse violation guide"
+            aria-pressed={showGuide}
+          >⚠ ?</button>
+          <button onClick={clearMessages} className={styles.clearBtn}>Clear</button>
+        </span>
       </header>
+      {showGuide && <ViolationGuide onClose={() => setShowGuide(false)} />}
       <div className={styles.tableWrapperOuter}>
         <div
           ref={wrapperRef}

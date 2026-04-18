@@ -50,7 +50,7 @@ function ImportBadge() {
 
 export default function App() {
   const { sendPing, sendMessage }       = useWebSocket();
-  const { openFilePicker, importFiles } = useCpdImport();
+  const { openLogsFilePicker, openImportFilePicker, importFiles } = useCpdImport();
   const serialConnected                 = useSerialConnected();
   const [dragging, setDragging]     = useState(false);
   const [showTopology, setShowTopology] = useState(true);
@@ -102,10 +102,16 @@ export default function App() {
         <StatusBadge />
         <ImportBadge />
         <button
-          onClick={openFilePicker}
+          onClick={openLogsFilePicker}
           className={styles.importBtn}
           disabled={serialConnected}
-          title={serialConnected ? 'Disconnect DISCO before importing a .cpd file' : undefined}
+          title={serialConnected ? 'Disconnect DISCO before importing a .cpd file' : 'Open from logs folder'}
+        >.cpd Open</button>
+        <button
+          onClick={openImportFilePicker}
+          className={styles.importBtn}
+          disabled={serialConnected}
+          title={serialConnected ? 'Disconnect DISCO before importing a .cpd file' : 'Import from last used folder'}
         >.cpd Import</button>
         <button onClick={sendPing} className={styles.pingBtn} style={{ display: 'none' }}>Ping</button>
         <button

@@ -82,6 +82,12 @@ export function useWebSocket() {
           if (decoded) {
             addMessage(decoded);
             applyFrame(decoded);
+            if (decoded.parseViolations?.length) {
+              const id = decoded.header?.typeName ?? 'frame';
+              for (const v of decoded.parseViolations) {
+                appendLog(`[ERROR] [Parser] ${id}: ${v}`);
+              }
+            }
             if (isUndecodedMessage(decoded.header)) {
               logUnknownRecords([buildUnknownRecord(decoded, 'websocket')]);
             }
@@ -103,6 +109,12 @@ export function useWebSocket() {
             for (const frame of frames) {
               addMessage(frame);
               applyFrame(frame);
+              if (frame.parseViolations?.length) {
+                const id = frame.header?.typeName ?? 'frame';
+                for (const v of frame.parseViolations) {
+                  appendLog(`[ERROR] [Parser] ${id}: ${v}`);
+                }
+              }
               if (isUndecodedMessage(frame.header)) {
                 unknowns.push(buildUnknownRecord(frame, 'serial'));
               }

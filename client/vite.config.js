@@ -16,6 +16,10 @@ const SERVER_PORT = parseInt(process.env.PORT ?? '3001', 10);
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
   define: {
     // Expose port to client bundle as import.meta.env.VITE_SERVER_PORT
     'import.meta.env.VITE_SERVER_PORT': JSON.stringify(String(SERVER_PORT)),

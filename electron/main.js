@@ -20,8 +20,18 @@ ipcMain.handle('open-file-dialog', async () => {
     ? path.join(process.env.UCPD_USER_DATA, 'logs')
     : path.join(__dirname, '../logs');
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: 'CPDファイルを選択',
+    title: '.cpd Open — ログフォルダ',
     defaultPath: logsDir,
+    filters: [{ name: 'CPD Files', extensions: ['cpd'] }],
+    properties: ['openFile', 'multiSelections'],
+  });
+  return canceled ? [] : filePaths;
+});
+
+// open-file-dialog-free: no defaultPath — OS/dialog uses last visited location.
+ipcMain.handle('open-file-dialog-free', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: '.cpd Import — 前回フォルダから選択',
     filters: [{ name: 'CPD Files', extensions: ['cpd'] }],
     properties: ['openFile', 'multiSelections'],
   });

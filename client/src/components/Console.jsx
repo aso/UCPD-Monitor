@@ -20,9 +20,12 @@ export default function Console() {
         <button onClick={clearLogs} className={styles.clearBtn}>Clear</button>
       </header>
       <div className={styles.log}>
-        {consoleLogs.map((line, i) => (
-          <div key={i} className={styles.line}>{line}</div>
-        ))}
+        {consoleLogs.map((line, i) => {
+          const cls = line.includes('[ERROR]') ? styles.lineError
+                    : line.includes('[WARN]')  ? styles.lineWarn
+                    : styles.line;
+          return <div key={i} className={cls}>{line}</div>;
+        })}
         <div ref={bottomRef} />
       </div>
     </section>

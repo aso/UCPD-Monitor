@@ -4,6 +4,45 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.4] - 2026-04-18
+
+### Added
+
+#### VDM 解析の強化 (`pd_parser.ts`)
+- **SVID 名前テーブル拡充** (`VDM_SVID_NAMES`): PD SID / DisplayPort / VESA Ext / TBT / Intel / Apple / Samsung / Sony / Huawei / Motorola / NVIDIA / AMD / Lenovo / HP / Cypress / Google / VIA Labs / OPPO·OnePlus / Linux Foundation など 20+ エントリを追加。
+- **既知 SVID の HEX 表示を廃止**: 名前が判明している SVID は名前のみ表示（例: `DP`、`TBT`）。未知 SVID は引き続き HEX のみ表示。
+- **VDM メッセージタイトル順の変更**: `Command [TYPE] — SVID  vX.Y` 形式に統一。例: `Discover SVIDs [REQ] — PD SID  v2.0`。
+
+#### .cpd ファイルピッカーの 2 ボタン化 (`App.jsx`, `useCpdImport.js`, `electron/main.js`, `electron/preload.js`)
+- **`.cpd Open`** ボタン: Electron では `logs/` ディレクトリ固定で開く (`open-file-dialog`)。ブラウザでは `startIn: 'downloads'`。
+- **`.cpd Import`** ボタン: Electron では OS がダイアログ位置を記憶 (`open-file-dialog-free`)。ブラウザでは前回フォルダを記憶 (`lastDirHandle`)。
+
+#### ファイルリプレイ時の DETACHED スキップ (`appStore.js`)
+- `replayFrames` で `DETACHED` イベントをスキップ: インポート再生時にトポロジーがリセットされず、最終接続状態を保持したままメッセージを再生。
+- ライブ受信時の `DETACHED` 動作は変更なし（フルリセット継続）。
+
+#### 0 バイトセッションファイルの自動削除 (`server/index.js`)
+- `closeSessionFile()` ヘルパー: セッションファイルをクローズ後にサイズを確認し、0 バイトであれば自動削除。
+- 接続・切断・DETACHED・サーバーシャットダウン時に適用。
+
+#### トポロジービューのノードヘッダーバッジ (`TopologyView.jsx`, `TopologyView.module.css`)
+- **製品タイプバッジ** をノードヘッダー行の右端に絶対配置 (`.nodeHeaderBadge`)。
+- SOURCE: `DFP_TYPE_LABELS`（PD Hub / PD Host / Power Brick など）。
+- SINK: `UFP_TYPE_LABELS`（PD Periph / Passive Cable / Active Cable / VPD など）。
+
+#### Console 表示改善 (`Console.jsx`, `Console.module.css`)
+- コンソールビューのスタイル・レイアウト調整。
+
+#### MessageTable 表示改善 (`MessageTable.jsx`, `MessageTable.module.css`)
+- テーブルレイアウトおよびスタイルの追加・調整。
+
+### Fixed
+
+#### SerialBar の重複デバイスバッジを削除 (`SerialBar.jsx`)
+- ドロップダウン下の `★ デバイス名` スパン（`deviceBadge`）を削除。ドロップダウン option 内にすでに `★ label` が表示されているため重複を排除。
+
+---
+
 ## [3.2.3] - 2026-04-16
 
 ### Added

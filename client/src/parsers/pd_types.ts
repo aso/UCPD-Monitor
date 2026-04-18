@@ -302,6 +302,13 @@ export interface PdMessage {
   };
   readonly recordType?: RecordType;
   readonly eprCapable?: boolean;
+  readonly frsCapable?: boolean;
+  /**
+   * USB PD spec constraint violations detected during parsing.
+   * Each entry is a human-readable string starting with '⚠'.
+   * Empty array or undefined means no violations were detected.
+   */
+  readonly parseViolations?: readonly string[];
 }
 
 /**

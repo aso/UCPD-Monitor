@@ -109,12 +109,27 @@ function cpdEventType(buf) {
   return null;
 }
 
+/** Close the current session file stream. If the file is 0 bytes, delete it. */
+function closeSessionFile() {
+  if (!sessionFileStream) return;
+  const closingPath = sessionFilePath;
+  try { sessionFileStream.end(); } catch (_) {}
+  sessionFileStream = null;
+  // Delete empty files (no frames were written)
+  if (closingPath) {
+    try {
+      const stat = fs.statSync(closingPath);
+      if (stat.size === 0) {
+        fs.unlinkSync(closingPath);
+        console.log(`[CPD] Removed empty session file: ${path.basename(closingPath)}`);
+      }
+    } catch (_) {}
+  }
+}
+
 /** Close current session file (if any) and open a new timestamped one. */
 function openSessionFile() {
-  if (sessionFileStream) {
-    try { sessionFileStream.end(); } catch (_) {}
-    sessionFileStream = null;
-  }
+  closeSessionFile();
   sessionFilePath   = makeSessionPath();
   sessionFileStream = fs.createWriteStream(sessionFilePath, { flags: 'w' });
   sessionFileStream.on('error', (e) => console.error('[CPD] File write error:', e.message));
@@ -497,12 +512,9 @@ function shutdown() {
   serialStatus = { connected: false, port: null, baudRate: null };
   console.log('[Server] Serial disconnected on shutdown');
 
-  // Flush and close session file
-  if (sessionFileStream) {
-    try { sessionFileStream.end(); } catch (_) {}
-    sessionFileStream = null;
-    console.log('[Server] Session file flushed on shutdown');
-  }
+  // Flush and close session file (deletes if empty)
+  closeSessionFile();
+  console.log('[Server] Session file flushed on shutdown');
 }
 
 // Auto-start when invoked directly via `node server/index.js`

@@ -1,14 +1,16 @@
 {
   "name": "client",
   "private": true,
-  "version": "0.0.0",
+  "version": "3.2.4",
   "type": "module",
   "scripts": {
     "predev": "node -e \"const n=require('net');const s=n.createServer();s.once('error',()=>{const {execSync}=require('child_process');try{const r=execSync('netstat -ano').toString();const m=r.match(/TCP\\s+[^:]+:5173\\s+\\S+\\s+LISTENING\\s+(\\d+)/);if(m){execSync('taskkill /F /PID '+m[1]);console.log('Killed PID '+m[1]+' on port 5173');}}catch(e){}});s.once('listening',()=>s.close());s.listen(5173);\"",
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.23",
@@ -27,6 +29,7 @@
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "typescript": "^6.0.2",
-    "vite": "^8.0.4"
+    "vite": "^8.0.4",
+    "vitest": "^4.1.4"
   }
 }

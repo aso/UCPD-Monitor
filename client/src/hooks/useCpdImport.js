@@ -10,6 +10,9 @@ const IMPORT_PATH_URL = '/api/import-cpd-by-path';
 /** True when running inside Electron with preload.js loaded. */
 const isElectron = () => typeof window !== 'undefined' && !!window.electronAPI?.openFileDialog;
 
+/** Last-used directory handle for browser "Import" fallback (session-scoped). */
+let lastDirHandle = null;
+
 /**
  * Hook for importing .cpd binary log files.
  *
@@ -72,52 +75,93 @@ export function useCpdImport() {
     [appendLog, setImportStatus]
   );
 
-  /**
-   * Open a native file-picker dialog (single or multiple .cpd files).
-   *
-   * - In Electron: delegates to main process via IPC so the dialog opens with
-   *   the default path set to %APPDATA%\UCPD-Monitor\logs.
-   * - In browser (dev mode): falls back to a hidden <input type="file">.
-   */
-  const openFilePicker = useCallback(() => {
-    if (isElectron()) {
-      // Electron path: IPC → main process → dialog.showOpenDialog → file paths
-      window.electronAPI.openFileDialog().then(async (filePaths) => {
-        if (!filePaths || filePaths.length === 0) return;
-        const names = filePaths.map((p) => p.split(/[\\/]/).pop()).join(', ');
-        appendLog(`[Import] Reading ${filePaths.length} file(s): ${names}`);
-        setImportStatus({ loading: true, filename: names, done: 0, total: filePaths.length, warnings: 0 });
-        try {
-          const res = await fetch(IMPORT_PATH_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ paths: filePaths }),
-          });
-          if (!res.ok) throw new Error(`Server returned ${res.status}`);
-          const { records } = await res.json();
-          setImportStatus({ loading: false, done: filePaths.length, warnings: 0 });
-          appendLog(`[Import] Done — ${records} record(s) from ${filePaths.length} file(s)`);
-        } catch (err) {
-          appendLog(`[Import] Error: ${err.message}`);
-          setImportStatus({ loading: false });
-        }
+  /** Shared Electron path-based import helper. */
+  const _importByPaths = useCallback(async (filePaths) => {
+    if (!filePaths || filePaths.length === 0) return;
+    const names = filePaths.map((p) => p.split(/[\\/]/).pop()).join(', ');
+    appendLog(`[Import] Reading ${filePaths.length} file(s): ${names}`);
+    setImportStatus({ loading: true, filename: names, done: 0, total: filePaths.length, warnings: 0 });
+    try {
+      const res = await fetch(IMPORT_PATH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: filePaths }),
       });
-    } else {
-      // Browser / dev fallback: standard file picker
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.cpd,application/octet-stream';
-      input.multiple = true;
-      input.style.display = 'none';
-      input.onchange = (e) => {
-        if (e.target.files?.length) importFiles(e.target.files);
-        document.body.removeChild(input);
-      };
-      document.body.appendChild(input);
-      input.click();
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const { records } = await res.json();
+      setImportStatus({ loading: false, done: filePaths.length, warnings: 0 });
+      appendLog(`[Import] Done — ${records} record(s) from ${filePaths.length} file(s)`);
+    } catch (err) {
+      appendLog(`[Import] Error: ${err.message}`);
+      setImportStatus({ loading: false });
     }
-  }, [importFiles, appendLog, setImportStatus]);
+  }, [appendLog, setImportStatus]);
 
-  return { openFilePicker, importFiles };
+  /**
+   * ".cpd Open" — opens the logs directory where session files are saved.
+   * - Electron: dialog.showOpenDialog with defaultPath = logs dir.
+   * - Browser:  showOpenFilePicker with startIn='downloads' (closest approximation).
+   */
+  const openLogsFilePicker = useCallback(() => {
+    if (isElectron()) {
+      window.electronAPI.openFileDialog().then((filePaths) => _importByPaths(filePaths));
+    } else if (typeof window.showOpenFilePicker === 'function') {
+      window.showOpenFilePicker({
+        multiple: true,
+        startIn: 'downloads',
+        types: [{ description: 'CPD Files', accept: { 'application/octet-stream': ['.cpd'] } }],
+      }).then(async (handles) => {
+        const files = await Promise.all(handles.map((h) => h.getFile()));
+        if (files.length) importFiles(files);
+      }).catch(() => {/* cancelled */});
+    } else {
+      _inputFilePicker(importFiles);
+    }
+  }, [importFiles, _importByPaths]);
+
+  /**
+   * ".cpd Import" — opens at the last used folder (OS remembers in Electron;
+   * browser session remembers via stored FileSystemDirectoryHandle).
+   * - Electron: dialog.showOpenDialog without defaultPath.
+   * - Browser:  showOpenFilePicker with startIn=lastDirHandle (or 'downloads').
+   */
+  const openImportFilePicker = useCallback(() => {
+    if (isElectron()) {
+      window.electronAPI.openFileDialogFree().then((filePaths) => _importByPaths(filePaths));
+    } else if (typeof window.showOpenFilePicker === 'function') {
+      const opts = {
+        multiple: true,
+        types: [{ description: 'CPD Files', accept: { 'application/octet-stream': ['.cpd'] } }],
+      };
+      if (lastDirHandle) opts.startIn = lastDirHandle;
+      window.showOpenFilePicker(opts).then(async (handles) => {
+        // Remember the directory of the first picked file for next time
+        if (handles.length > 0) {
+          try { lastDirHandle = await handles[0].getParent?.(); } catch { /* ignore */ }
+        }
+        const files = await Promise.all(handles.map((h) => h.getFile()));
+        if (files.length) importFiles(files);
+      }).catch(() => {/* cancelled */});
+    } else {
+      _inputFilePicker(importFiles);
+    }
+  }, [importFiles, _importByPaths]);
+
+  return { openLogsFilePicker, openImportFilePicker, importFiles };
+}
+
+/** Fallback: hidden <input type="file"> for browsers without showOpenFilePicker. */
+function _inputFilePicker(importFiles) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.cpd,application/octet-stream';
+  input.multiple = true;
+  input.style.display = 'none';
+  input.onchange = (e) => {
+    if (e.target.files?.length) importFiles(e.target.files);
+    document.body.removeChild(input);
+  };
+  document.body.appendChild(input);
+  input.click();
 }
 

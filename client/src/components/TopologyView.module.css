@@ -210,6 +210,7 @@
   justify-content: center;
   gap: 5px;
   margin-bottom: 3px;
+  position: relative;
 }
 
 .nodeLabel {
@@ -219,6 +220,22 @@
   letter-spacing: 5px;
   text-transform: uppercase;
   font-family: 'Consolas', 'Menlo', monospace;
+}
+
+.nodeHeaderBadge {
+  font-size: 8px;
+  font-weight: 700;
+  color: #80cbc4;
+  border: 1px solid #2a5a58;
+  border-radius: 3px;
+  padding: 0 4px;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: inherit;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .nodeSub {
@@ -679,6 +696,15 @@
   padding: 0 3px;
 }
 
+.sinkSpecDrp {
+  font-size: 8px;
+  font-weight: 700;
+  color: #ffd54f;
+  border: 1px solid #6a5a00;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
 .sinkSpecDrd {
   font-size: 8px;
   font-weight: 700;
@@ -712,6 +738,16 @@
   border-radius: 2px;
   padding: 0 3px;
   margin-left: 4px;
+}
+
+/* Product Type badge (dfpPType / ufpPType from Discover Identity ID Header) */
+.specPTypeLabel {
+  font-size: 8px;
+  font-weight: 700;
+  color: #80cbc4;
+  border: 1px solid #2a5a58;
+  border-radius: 2px;
+  padding: 0 3px;
 }
 
 
@@ -795,6 +831,28 @@
   font-size: 9px;
   letter-spacing: 0.5px;
   margin-top: 2px;
+}
+
+.rdoGiveBackBadge {
+  font-size: 8px;
+  font-weight: 700;
+  color: #90caf9;
+  border: 1px solid #2a4a6a;
+  border-radius: 2px;
+  padding: 0 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.rdoCapMismatchBadge {
+  font-size: 8px;
+  font-weight: 700;
+  color: #ffd54f;
+  border: 1px solid #6a5a00;
+  border-radius: 2px;
+  padding: 0 3px;
+  margin-left: 4px;
+  vertical-align: middle;
 }
 
 

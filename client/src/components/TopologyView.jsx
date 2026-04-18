@@ -40,11 +40,14 @@ const USB_VID_VENDORS = {
   0x27C6: 'Goodix',
   0x2717: 'Xiaomi',
   0x2E04: 'Huawei',
+  0x291A: 'Anker Innovations',
+  
+  0x2FE6: 'Zhuhai iSmartWare Technology',
   0x3434: 'Keychron',
   0x3438: 'ATEN',
   0x348F: 'Luxshare',
   0x413C: 'Dell',
-  0x5FC9: 'Parade Tech.',
+  0x5FC9: 'ChargerLAB',
   0x7104: 'ZOTAC',
   0x8086: 'Intel',
   0x8087: 'Intel',
@@ -647,11 +650,34 @@ function EprLamp({ mode }) {
 
 // ── RDO detail panel (inside sink right column) ──────────────
 
-function RdoPanel({ rdo }) {
+function RdoPanel({ rdo, sourceCaps }) {
   const { objPos, opVoltage_mV, opCurrent_mA, maxCurrent_mA,
           opPower_mW, limPower_mW, giveBack, capMismatch, rdoType } = rdo;
   const isAdj = rdoType === 'PPS' || rdoType === 'AVS';
   const isBat = rdoType === 'Battery';
+  const isVar = rdoType === 'Variable';
+  const pdo   = sourceCaps?.[objPos - 1] ?? null;
+
+  // Derive voltage label/value from source PDO or negotiated value
+  // For adjustable RDOs: prefer the negotiated opVoltage_mV over the PDO range
+  let vLabel = null;
+  let vValue = null;
+  if (isAdj && opVoltage_mV != null) {
+    vLabel = 'V.req';
+    vValue = `${(opVoltage_mV / 1000).toFixed(2)} V`;
+  } else if (pdo) {
+    if (!isAdj && !isBat && !isVar) {
+      // Fixed: show the PDO voltage
+      if (pdo.vMv != null) { vLabel = 'V'; vValue = `${(pdo.vMv / 1000).toFixed(2)} V`; }
+    } else {
+      // Adjustable/Battery/Variable without negotiated value: show PDO voltage range
+      if (pdo.vMinMv != null && pdo.vMaxMv != null) {
+        vLabel = 'V.rng';
+        vValue = `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)} V`;
+      }
+    }
+  }
+
   return (
     <div className={styles.rdoPanel}>
       <span className={styles.rdoPanelTitle}>RDO</span>
@@ -661,12 +687,16 @@ function RdoPanel({ rdo }) {
       </div>
       <div className={styles.rdoPanelRow}>
         <span className={styles.rdoPanelKey}>Type</span>
-        <span className={styles.rdoPanelVal}>{rdoType ?? 'Fixed'}</span>
+        <span className={styles.rdoPanelVal}>
+          {rdoType ?? 'Fixed'}
+          {giveBack && <span className={styles.rdoGiveBackBadge}>GiveBack</span>}
+          {capMismatch && <span className={styles.rdoCapMismatchBadge}>⚠ CapMismatch</span>}
+        </span>
       </div>
-      {isAdj && opVoltage_mV != null && (
+      {vLabel && (
         <div className={styles.rdoPanelRow}>
-          <span className={styles.rdoPanelKey}>V.req</span>
-          <span className={styles.rdoPanelVal}>{(opVoltage_mV / 1000).toFixed(2)} V</span>
+          <span className={styles.rdoPanelKey}>{vLabel}</span>
+          <span className={styles.rdoPanelVal}>{vValue}</span>
         </div>
       )}
       {isBat ? (
@@ -694,8 +724,6 @@ function RdoPanel({ rdo }) {
           )}
         </>
       )}
-      {giveBack    && <div className={styles.rdoPanelFlag} style={{ color: '#90caf9' }}>GiveBack</div>}
-      {capMismatch && <div className={styles.rdoPanelFlag} style={{ color: '#ff9800' }}>⚠ CapMismatch</div>}
     </div>
   );
 }
@@ -703,11 +731,20 @@ function RdoPanel({ rdo }) {
 // ── Source spec badge ───────────────────────────────────────────
 
 /** Compact spec badge shown at the top of the SOURCE node box */
+// Table 6.37 Product Type (DFP) — B25:23 of ID Header VDO
+const DFP_TYPE_LABELS = ['', 'PD Hub', 'PD Host', 'Power Brick', '', '', '', ''];
+// Table 6.37 Product Type (UFP) — B29:27 of ID Header VDO
+const UFP_TYPE_LABELS = ['', 'PD Hub', 'PD Periph', 'Passive Cable', 'Active Cable', '', 'VPD', ''];
+
 function SrcSpecBadge({ source }) {
   const scdb = source.scdb;
   // Cap_Extended: only when Source_Capabilities_Extended was actually received
   const extMsgCap = !!scdb?.length;
-  if (!scdb?.length && !source.eprActive && !extMsgCap && !source.vdmSeen && !source.drd && !source.altMode) return null;
+  // EPR capable from Source_Capabilities PDO#1 bit 23 (eprModeCapable)
+  const eprCapFromCaps = source.capabilities?.some(pdo => pdo.eprModeCapable) ?? false;
+  const dfpPType = source.discId?.dfpPType ?? 0;
+  const dfpLabel = DFP_TYPE_LABELS[dfpPType] ?? '';
+  if (!scdb?.length && !source.eprActive && !eprCapFromCaps && !source.vdmSeen && !source.drd && !source.drp && !source.altMode) return null;
 
   const scdbVal  = (label) => scdb?.find((s) => s.label === label)?.value ?? null;
   const scdbVid  = scdbVal('VID');
@@ -731,8 +768,9 @@ function SrcSpecBadge({ source }) {
         {vidMismatch && <span className={styles.sinkSpecWarn}>⚠ VID mismatch</span>}
       </div>
       <div className={styles.sinkSpecRow}>
-        {(eprCap || source.eprActive) && <span className={styles.sinkSpecEpr}>EPR RDY</span>}
+        {!source.eprActive && (eprCap || eprCapFromCaps) && <span className={styles.sinkSpecEpr}>EPR_RDY</span>}
         {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {source.drp && <span className={styles.sinkSpecDrp}>DRP</span>}
         {source.drd && <span className={styles.sinkSpecDrd}>DRD</span>}
         {source.altMode && <span className={styles.sinkSpecAlt}>Alt Mode</span>}
         {source.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
@@ -761,7 +799,9 @@ function SinkSpecBadge({ sink }) {
   const skedb = sink.skedb;
   // Cap_Extended: only when Sink_Capabilities_Extended was actually received
   const extMsgCap = !!(skedb?.length);
-  if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen && !sink.drd && !sink.altMode) return null;
+  const ufpPType = sink.discId?.ufpPType ?? 0;
+  const ufpLabel = UFP_TYPE_LABELS[ufpPType] ?? '';
+  if (!skedb?.length && !sink.eprActive && !extMsgCap && !sink.vdmSeen && !sink.drd && !sink.drp && !sink.altMode) return null;
 
   const skedbVal  = (label) => skedb?.find((s) => s.label === label)?.value ?? null;
   const skedbVid  = skedbVal('VID');
@@ -785,10 +825,9 @@ function SinkSpecBadge({ sink }) {
         {vidMismatch && <span className={styles.sinkSpecWarn}>⚠ VID mismatch</span>}
       </div>
       <div className={styles.sinkSpecRow}>
-        {(eprCap || sink.eprActive) && (
-          <span className={styles.sinkSpecEpr}>EPR RDY</span>
-        )}
+        {!sink.eprActive && eprCap && <span className={styles.sinkSpecEpr}>EPR_RDY</span>}
         {extMsgCap && <span className={styles.sinkSpecCap}>Cap_Ext</span>}
+        {sink.drp && <span className={styles.sinkSpecDrp}>DRP</span>}
         {sink.drd && <span className={styles.sinkSpecDrd}>DRD</span>}
         {sink.altMode && <span className={styles.sinkSpecAlt}>Alt Mode</span>}
         {sink.vdmSeen && <span className={styles.sinkSpecCap}>VDM</span>}
@@ -800,7 +839,7 @@ function SinkSpecBadge({ sink }) {
   );
 }
 
-function SinkContent({ sink }) {
+function SinkContent({ sink, sourceCaps }) {
   const hasSnkCaps = sink.capabilities.length > 0;
   const hasSrcCaps = sink.srcCaps?.length > 0;
   const hasRdo     = !!sink.lastRequest;
@@ -813,7 +852,7 @@ function SinkContent({ sink }) {
         <div className={styles.sinkColumnsInner}>
           {hasRight && (
             <div className={styles.sinkColRdo}>
-              {hasRdo && <RdoPanel rdo={sink.lastRequest} />}
+              {hasRdo && <RdoPanel rdo={sink.lastRequest} sourceCaps={sourceCaps} />}
               {hasSrcCaps && (
                 <div style={{ marginTop: hasRdo ? 4 : 0 }}>
                   <div className={styles.sinkColLabel}>SRC CAP</div>
@@ -888,7 +927,7 @@ function ContractInMarker({ contract }) {
   );
 }
 
-function NodeBox({ label, sub, meterRows, capList, mode, state, narrow }) {
+function NodeBox({ label, badge, sub, meterRows, capList, mode, state, narrow }) {
   const boxCls = { inactive: styles.nodeInactive, active: styles.nodeActive, contract: styles.nodeContract, epr: styles.nodeEPR }[state] ?? styles.nodeInactive;
   const dotCls = { inactive: styles.dotGray, active: styles.dotGreen, contract: styles.dotBlue, epr: styles.dotOrange }[state] ?? styles.dotGray;
   return (
@@ -897,6 +936,7 @@ function NodeBox({ label, sub, meterRows, capList, mode, state, narrow }) {
       <div className={styles.nodeHeader}>
         <span className={`${styles.statusDot} ${dotCls}`} />
         <span className={styles.nodeLabel}>{label}</span>
+        {badge && <span className={styles.nodeHeaderBadge}>{badge}</span>}
       </div>
       {capList != null
         ? capList
@@ -1026,8 +1066,8 @@ export default function TopologyView() {
   const snkCapList = useMemo(() => {
     if (!sink.connected) return null;
     if (!sink.capabilities.length && !sink.lastRequest) return null;
-    return <SinkContent sink={sink} />;
-  }, [sink]);
+    return <SinkContent sink={sink} sourceCaps={source.capabilities} />;
+  }, [sink, source.capabilities]);
 
   const snkNarrow = sink.connected && !sink.capabilities.length && !!sink.lastRequest;
   const contractState = source.eprActive ? 'epr' : source.contract ? 'contract' : source.connected ? 'active' : 'inactive';
@@ -1044,9 +1084,9 @@ export default function TopologyView() {
 
         <div className={styles.center}>
           <div className={styles.chain}>
-            <NodeBox label="SOURCE" capList={srcCapList} sub={srcSub} mode={source.eprActive ? 'epr' : source.contract ? 'spr' : null} state={srcState} />
+            <NodeBox label="SOURCE" badge={DFP_TYPE_LABELS[source.discId?.dfpPType] || null} capList={srcCapList} sub={srcSub} mode={source.eprActive ? 'epr' : source.contract ? 'spr' : null} state={srcState} />
             <CableWithEMarker state={contractState} sop1={eMarker.sop1} sop2={eMarker.sop2} contract={source.contract} />
-            <NodeBox label="SINK" capList={snkCapList} sub={snkSub} mode={sink.eprActive ? 'epr' : sink.lastRequest ? 'spr' : null} state={snkState} narrow={snkNarrow} />
+            <NodeBox label="SINK" badge={UFP_TYPE_LABELS[sink.discId?.ufpPType] || null} capList={snkCapList} sub={snkSub} mode={sink.eprActive ? 'epr' : sink.lastRequest ? 'spr' : null} state={snkState} narrow={snkNarrow} />
           </div>
         </div>
 

@@ -16,4 +16,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns {Promise<string[]>} Array of absolute file paths (empty if cancelled).
    */
   openFileDialog: () => ipcRenderer.invoke('open-file-dialog'),
+
+  /**
+   * Open a native file-picker dialog without forcing a default directory.
+   * The OS/dialog will use the last visited location.
+   *
+   * @returns {Promise<string[]>} Array of absolute file paths (empty if cancelled).
+   */
+  openFileDialogFree: () => ipcRenderer.invoke('open-file-dialog-free'),
 });

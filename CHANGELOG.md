@@ -4,7 +4,7 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
-## [3.2.5] - 2026-04-18
+## [3.2.5] - 2026-04-19
 
 ### Added
 

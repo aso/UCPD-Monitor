@@ -23,6 +23,9 @@ pnpm-debug.log*
 # Python virtual environment
 .venv/
 
+# One-off scripts (not part of the project)
+fix_contract.py
+
 # AI workspace notes
 memories/
 

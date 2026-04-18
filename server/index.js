@@ -4,13 +4,52 @@
 
 const express = require('express');
 const http = require('http');
+const { execSync } = require('child_process');
 const { WebSocketServer } = require('ws');
 const path = require('path');
 const fs = require('fs');
 const { SerialPort } = require('serialport');
 const { CpdStreamParser } = require('./cpdStreamParser');
 
-const PORT = process.env.PORT || 3001;
+/**
+ * Return the process name owning the given TCP LISTEN port, or null if
+ * it cannot be determined.  No network I/O is performed — OS-level only.
+ * Supported on Windows (netstat+tasklist) and Linux/macOS (lsof).
+ *
+ * @param {number} port
+ * @returns {string|null}  e.g. "node.exe", "node", "python.exe", null
+ */
+function getPortOwnerProcessName(port) {
+  try {
+    if (process.platform === 'win32') {
+      // netstat -ano lists TCP listeners with their PID
+      const netstat = execSync('netstat -ano', { timeout: 3000 }).toString();
+      const re = new RegExp(`TCP\\s+[^:]+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`);
+      const m = netstat.match(re);
+      if (!m) return null;
+      const pid = m[1];
+      const tasklist = execSync(
+        `tasklist /FI "PID eq ${pid}" /FO CSV /NH`,
+        { timeout: 3000 }
+      ).toString().trim();
+      if (!tasklist) return null;
+      // CSV first field is the image name: "node.exe","12345",...
+      return tasklist.split(',')[0].replace(/"/g, '').trim() || null;
+    } else {
+      // lsof -Fp gives lines like "p12345" then "cnode"
+      const out = execSync(
+        `lsof -i :${port} -sTCP:LISTEN -Fp -Fc`,
+        { timeout: 3000 }
+      ).toString();
+      const cm = out.match(/^c(.+)$/m);
+      return cm ? cm[1].trim() : null;
+    }
+  } catch {
+    return null;  // OS command failed or permission denied — treat as unknown
+  }
+}
+
+const PORT = parseInt(process.env.UCPD_PORT ?? '57321', 10);
 
 // YAML log file for undecoded / unknown packets
 // In a packaged Electron app __dirname is inside an asar (read-only).
@@ -63,7 +102,25 @@ function recordToYaml(rec, capturedAt) {
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+
+// ── Security: WebSocket Origin validation ──────────────────────────────────
+// Reject WS upgrades whose Origin is not localhost/127.0.0.1.
+// This blocks DNS-Rebinding attacks via the WebSocket channel.
+const wss = new WebSocketServer({
+  server,
+  verifyClient: ({ origin, req }, cb) => {
+    // Electron renderer sends no Origin header — allow it.
+    if (!origin) return cb(true);
+    try {
+      const u = new URL(origin);
+      const ok = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+      if (!ok) console.warn(`[WS] Rejected connection from origin: ${origin}`);
+      cb(ok, 403, 'Forbidden');
+    } catch {
+      cb(false, 403, 'Forbidden');
+    }
+  },
+});
 
 // ----- Serial port state -----
 let activePort   = null;   // SerialPort instance
@@ -266,6 +323,16 @@ function connectSerial(portPath, baudRate) {
 app.use(express.static(path.join(__dirname, '../client/dist')));
 app.use(express.json());
 
+// ── Security: Host header validation (DNS-Rebinding protection) ───────────
+// Allow only localhost / 127.0.0.1 as the HTTP Host header value.
+// This prevents a malicious webpage from using DNS rebinding to reach the API.
+app.use((req, res, next) => {
+  const host = (req.headers['host'] ?? '').split(':')[0].toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host === '') return next();
+  console.warn(`[Security] Rejected request with Host: ${req.headers['host']} ${req.method} ${req.path}`);
+  res.status(403).json({ error: 'Forbidden: invalid Host header' });
+});
+
 // ----- WebSocket broadcast helper -----
 function broadcast(data) {
   const msg = JSON.stringify(data);
@@ -336,8 +403,12 @@ wss.on('connection', (ws, req) => {
 });
 
 // ----- REST API -----
+// Unique fingerprint identifying this application.
+// Must match the value checked in startServer()'s EADDRINUSE probe.
+const APP_ID = 'ucpd-monitor-server';
+
 app.get('/api/status', (_req, res) => {
-  res.json({ status: 'ok', clients: wss.clients.size });
+  res.json({ status: 'ok', appId: APP_ID, clients: wss.clients.size });
 });
 
 // List available serial ports
@@ -467,6 +538,21 @@ app.post('/api/import-cpd-by-path', (req, res) => {
   }
 });
 
+// ----- Graceful remote shutdown (POST /api/shutdown) -----
+// Dev-mode only: allows a newly-starting dev instance to displace this one.
+// Disabled in Electron builds to prevent end-user exposure.
+app.post('/api/shutdown', (_req, res) => {
+  if (process.versions.electron) {
+    console.warn('[Security] POST /api/shutdown rejected in Electron build');
+    return res.status(403).json({ error: 'Forbidden in production build' });
+  }
+  res.json({ ok: true, message: 'shutting down' });
+  console.log('[Server] Remote shutdown requested via POST /api/shutdown');
+  shutdown();
+  // Give the response a moment to flush before exiting
+  setTimeout(() => process.exit(0), 200);
+});
+
 // Fallback: serve React app for all other routes
 app.get('*', (_req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
@@ -484,13 +570,80 @@ function startServer(port) {
   const logsDir = getLogsDir();
   if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
   return new Promise((resolve, reject) => {
-    server.listen(p, () => {
-      console.log(`[Server] Listening on http://localhost:${p}`);
+    // Bind explicitly to loopback only — never expose to the network.
+    server.listen(p, '127.0.0.1', () => {
+      console.log(`[Server] Listening on http://127.0.0.1:${p}`);
       resolve(p);
-    }).on('error', (err) => {
+    }).on('error', async (err) => {
       if (err.code === 'EADDRINUSE') {
-        console.warn(`[Server] Port ${p} already in use — assuming server already running`);
-        resolve(p);  // treat as success; Electron will load the existing instance
+        // ── Electron (production) context: never probe or displace ────────
+        // When loaded by electron/main.js, process.versions.electron is set.
+        // End-user Electron builds must not send any bytes to unknown owners.
+        if (process.versions.electron) {
+          reject(new Error(
+            `Port ${p} is already in use. ` +
+            'Cannot displace another process from an Electron build.'
+          ));
+          return;
+        }
+
+        // ── Dev context (node server/index.js) ────────────────────────────
+        // Step 1: OS-level process name check — no network I/O.
+        // If the port owner is not a Node.js process we must NOT send any
+        // bytes to it; doing so could corrupt a binary-protocol server.
+        const ownerName = getPortOwnerProcessName(p);
+        console.warn(`[Server] Port ${p} already in use — owner process: ${ownerName ?? '(unknown)'}`);
+        const isNodeProcess = ownerName === null   // unknown → give HTTP probe a chance
+          || /^node(\.exe)?$/i.test(ownerName);
+        if (!isNodeProcess) {
+          reject(new Error(
+            `Port ${p} is occupied by "${ownerName}" (not a Node.js process). ` +
+            'Refusing to probe it to avoid protocol corruption.'
+          ));
+          return;
+        }
+        // Step 2: HTTP probe — verify appId fingerprint.
+        console.warn(`[Server] Probing for existing UCPD-Monitor instance on port ${p}...`);
+        const isOurApp = await new Promise((res2) => {
+          const req = http.get(`http://127.0.0.1:${p}/api/status`, { timeout: 1500 }, (r) => {
+            let body = '';
+            r.on('data', (chunk) => { body += chunk; });
+            r.on('end', () => {
+              try {
+                const json = JSON.parse(body);
+                res2(json && json.appId === APP_ID);
+              } catch { res2(false); }
+            });
+          });
+          req.on('error', () => res2(false));
+          req.on('timeout', () => { req.destroy(); res2(false); });
+        });
+        if (!isOurApp) {
+          reject(new Error(`Port ${p} is occupied by an unrelated Node.js process. Aborting.`));
+          return;
+        }
+        // Step 3: Ask the existing dev-server instance to shut down gracefully.
+        console.log(`[Server] Sending shutdown request to existing instance on port ${p}...`);
+        await new Promise((res3) => {
+          const body = '{}';
+          const req2 = http.request({
+            hostname: 'localhost', port: p,
+            path: '/api/shutdown', method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+            timeout: 2000,
+          }, () => res3());
+          req2.on('error', () => res3());
+          req2.on('timeout', () => { req2.destroy(); res3(); });
+          req2.write(body);
+          req2.end();
+        });
+        // Wait for the old process to release the port, then retry.
+        console.log(`[Server] Waiting for port ${p} to be released...`);
+        await new Promise((res4) => setTimeout(res4, 800));
+        server.listen(p, '127.0.0.1', () => {
+          console.log(`[Server] Listening on http://127.0.0.1:${p} (after displacing old dev instance)`);
+          resolve(p);
+        }).on('error', (err2) => reject(err2));
       } else {
         reject(err);
       }

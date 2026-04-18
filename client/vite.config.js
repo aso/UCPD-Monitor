@@ -9,9 +9,9 @@ import { fileURLToPath } from 'url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'))
 
-// Server port: inherit from environment (PORT=xxxx npm run dev) or default 3001.
-// Must match the Node server's PORT env var.
-const SERVER_PORT = parseInt(process.env.PORT ?? '3001', 10);
+// Server port: inherit from environment (UCPD_PORT=xxxx npm run dev) or default 57321.
+// Must match the Node server's UCPD_PORT env var.
+const SERVER_PORT = parseInt(process.env.UCPD_PORT ?? '57321', 10);
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -31,11 +31,11 @@ export default defineConfig({
     strictPort: true,   // fail fast if port 5173 is taken – never silently shift to another port
     proxy: {
       '/api': {
-        target: `http://localhost:${SERVER_PORT}`,
+        target: `http://127.0.0.1:${SERVER_PORT}`,
         changeOrigin: true,
       },
       '/ws': {
-        target: `ws://localhost:${SERVER_PORT}`,
+        target: `ws://127.0.0.1:${SERVER_PORT}`,
         ws: true,
       },
     },

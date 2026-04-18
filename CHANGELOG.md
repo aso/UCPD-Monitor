@@ -4,6 +4,27 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.5] - 2026-04-18
+
+### Added
+
+#### サーバセキュリティ強化 (`server/index.js`, `client/vite.config.js`)
+
+- **ループバック限定バインド**: `server.listen` の第 2 引数を `'127.0.0.1'` に固定。初回バインドおよび EADDRINUSE 後の再バインドの両方に適用。外部ネットワークへの公開を防止。
+- **HTTP Host ヘッダー検証**: `express.json()` 直後に全リクエストを検査するミドルウェアを追加。`Host` ヘッダーのホスト部分が `localhost` / `127.0.0.1` 以外の場合は 403 を返す。DNS Rebinding 攻撃への対策。
+- **WebSocket Origin 検証**: `WebSocketServer` の `verifyClient` で接続元 Origin を確認。`localhost` / `127.0.0.1` 以外のオリジンを 403 で拒否。Electron renderer は Origin ヘッダー未送信のため無条件に許可。
+- **`/api/shutdown` の Electron 無効化**: Electron ビルド (`process.versions.electron` が truthy) では `POST /api/shutdown` に対して 403 Forbidden を返す。開発モードでのみ自己置換に使用可能。
+
+#### ポート・URL の統一 (`server/index.js`, `client/vite.config.js`)
+
+- HTTP probe URL・Vite proxy target を `localhost` から `127.0.0.1` に統一。Windows 環境で `localhost` が IPv6 (`::1`) に解決され、ループバックバインドしたサーバへ接続できない問題を回避。
+
+#### `.gitignore` 更新
+
+- `fix_contract.py` をリポジトリ除外対象に追加。
+
+---
+
 ## [3.2.4] - 2026-04-18
 
 ### Added

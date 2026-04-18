@@ -11,7 +11,7 @@ const { autoUpdater } = require('electron-updater');
 // run directly via `node server/index.js`).
 const { startServer, shutdown } = require('../server/index.js');
 
-const SERVER_PORT = parseInt(process.env.PORT ?? '3001', 10);
+const SERVER_PORT = parseInt(process.env.UCPD_PORT ?? '57321', 10);
 const SERVE_URL   = `http://localhost:${SERVER_PORT}`;
 
 // ── IPC handlers ──────────────────────────────────────────────────────────

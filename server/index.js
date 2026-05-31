@@ -126,6 +126,71 @@ const wss = new WebSocketServer({
 let activePort   = null;   // SerialPort instance
 let activeParser = null;   // CpdStreamParser instance
 let serialStatus = { connected: false, port: null, baudRate: null };
+let measurePollTimer = null; // periodic request timer for ADC stream
+let guiInitDone = false;
+let pendingMeasureCmd = null; // 'start' | 'stop' while waiting FW CONFIG_SET_CNF/REJ
+
+const MEASURE_POLL_INTERVAL_MS = 160;
+const MEASURE_START_CMD = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,  // sync
+  0x26,                     // tag (DPM_CONFIG_SET_REQ for port 0)
+  0x00, 0x04,               // payload length (BE uint16)
+  0x1A, 0x00, 0x01, 0x84,   // payload: MeasReportValue=4 (4×40ms=160ms), MeasReportActivation=1
+  0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
+]);
+
+const MEASURE_STOP_CMD = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,  // sync
+  0x26,                     // tag (DPM_CONFIG_SET_REQ for port 0)
+  0x00, 0x04,               // payload length (BE uint16)
+  0x1A, 0x00, 0x01, 0x04,   // payload: MeasReportValue=4, MeasReportActivation=0
+  0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
+]);
+
+const GUI_INIT_REQ_CMD = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,  // sync
+  0x02,                     // tag (DPM_INIT_REQ, port=0 means global init)
+  0x00, 0x00,               // payload length
+  0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
+]);
+
+const GUI_INIT_REQ_PORT0_CMD = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,
+  0x22,                     // tag (DPM_INIT_REQ, port=1)
+  0x00, 0x00,
+  0xA5, 0xA5, 0xA5, 0xA5,
+]);
+
+const MEASURE_START_CMD_PORT1 = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,
+  0x46,                     // tag (DPM_CONFIG_SET_REQ for alt port encoding)
+  0x00, 0x04,
+  0x1A, 0x00, 0x01, 0x84,
+  0xA5, 0xA5, 0xA5, 0xA5,
+]);
+
+const MEASURE_STOP_CMD_PORT1 = Buffer.from([
+  0xFD, 0xFD, 0xFD, 0xFD,
+  0x46,                     // tag (DPM_CONFIG_SET_REQ for alt port encoding)
+  0x00, 0x04,
+  0x1A, 0x00, 0x01, 0x04,
+  0xA5, 0xA5, 0xA5, 0xA5,
+]);
+
+function writeFramesSequentially(port, frames, logPrefix) {
+  let i = 0;
+  const next = () => {
+    if (!port || i >= frames.length) return;
+    const frame = frames[i++];
+    port.write(frame, (err) => {
+      if (err) {
+        console.warn(`${logPrefix} write error: ${err.message}`);
+      }
+      next();
+    });
+  };
+  next();
+}
 
 // ----- CPD record history (ring buffer for live serial replay on browser reload) -----
 const MAX_HISTORY = 50000;
@@ -276,7 +341,31 @@ function broadcastSerialStatus() {
   broadcast({ type: 'SERIAL_STATUS', ...serialStatus });
 }
 
+function clearMeasurePolling() {
+  if (measurePollTimer) {
+    clearInterval(measurePollTimer);
+    measurePollTimer = null;
+  }
+}
+
+function startMeasurePolling() {
+  clearMeasurePolling();
+  measurePollTimer = setInterval(() => {
+    if (!activePort) {
+      clearMeasurePolling();
+      return;
+    }
+
+    activePort.write(MEASURE_START_CMD, (err) => {
+      if (err) console.warn(`[Measure] Poll write error: ${err.message}`);
+    });
+  }, MEASURE_POLL_INTERVAL_MS);
+}
+
 function disconnectSerial(reason) {
+  clearMeasurePolling();
+  guiInitDone = false;
+  pendingMeasureCmd = null;
   if (activePort) {
     try { activePort.close(); } catch (_) { /* ignore */ }
     activePort   = null;
@@ -287,6 +376,7 @@ function disconnectSerial(reason) {
   // Flush history so next session starts clean
   recordHistory.length = 0;
   resetSessionFile();
+  broadcast({ type: 'MEASURE_RUNNING', running: false });
   broadcastSerialStatus();
 }
 
@@ -321,31 +411,64 @@ function connectSerial(portPath, baudRate) {
       else        console.log('[Serial] DTR asserted → firmware should start CPD stream');
     });
 
+    // GUI notifications are emitted only after FW receives DPM_INIT_REQ.
+    writeFramesSequentially(sp, [GUI_INIT_REQ_CMD, GUI_INIT_REQ_PORT0_CMD], '[GUI] INIT_REQ');
+    console.log('[GUI] INIT_REQ sent (global + port1 fallback)');
+
     broadcastSerialStatus();
 
     sp.pipe(parser);
 
-    // Each complete non-CPD TLV frame (command response, measurement stream, etc.) → broadcast raw
+    // Each complete non-CPD TLV frame (command response, measurement stream, etc.).
     parser.on('measure_frame', (buf) => {
-      // Outer TLV envelope: [sync:4][tag:1][rsvd:1][len:1][value:len][sentinel:4]
-      // Value is a sequence of inner TLVs:  [tag:1][rsvd:1][len:1][value:len] ...
+      // Outer TLV envelope: [sync:4][tag:1][len:2,BE][value:len][sentinel:4]
+      // Measurement indications use DPM_MESSAGE_IND (0x0C) with port encoded in upper bits.
+      // Value is a sequence of inner TLVs: [tag:1][len:2,BE][value:len] ...
       // Known inner tags (USBPD_GUI_Tag_Indication):
       //   0x13 = GUI_IND_TIMESTAMP  → LE uint32 firmware tick
       //   0x0C = GUI_IND_VBUS_LEVEL + GUI_IND_IBUS_LEVEL (packed)
-      //          bytes [0-1]: VBUS in mV (LE uint16)
-      //          bytes [2-3]: IBUS in mA (LE uint16)
+      //          packed LE uint32:
+      //            bits [15:0]  = VBUS in mV
+      //            bits [31:16] = abs(IBUS) in mA
       const outerTag = buf[4];
-      const tlvLen   = buf[6];
+      const baseTag  = outerTag & 0x1F;
+      const tlvLen   = (buf[5] << 8) | buf[6];
       const rawHex   = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+      console.log(`[Measure] RX frame tag=0x${outerTag.toString(16).padStart(2, '0')} len=${tlvLen} raw=${rawHex}`);
+
+      if (baseTag === 0x03) {
+        guiInitDone = true;
+        console.log('[GUI] INIT_CNF received; GUI notifications are enabled');
+      }
+
+      if (baseTag === 0x07 && pendingMeasureCmd) {
+        const cmd = pendingMeasureCmd;
+        pendingMeasureCmd = null;
+        broadcast({ type: 'MEASURE_ACK', ok: true, cmd });
+        broadcast({ type: 'MEASURE_RUNNING', running: cmd === 'start' });
+        return;
+      }
+
+      if (baseTag === 0x08 && pendingMeasureCmd) {
+        const cmd = pendingMeasureCmd;
+        pendingMeasureCmd = null;
+        broadcast({ type: 'MEASURE_ACK', ok: false, cmd, error: 'FW rejected DPM_CONFIG_SET_REQ' });
+        return;
+      }
+
+      // Keep only DPM_MESSAGE_IND frames (base tag 0x0C); other non-CPD frames are responses.
+      if (baseTag !== 0x0C) {
+        return;
+      }
 
       // Parse inner TLV sequence
       const fields = {};
+      let hasMeasurementPayload = false;
       let offset = 7;
       const end   = 7 + tlvLen;
       while (offset + 3 <= end) {
         const innerTag = buf[offset];
-        // buf[offset + 1] is reserved, always 0x00
-        const innerLen = buf[offset + 2];
+        const innerLen = (buf[offset + 1] << 8) | buf[offset + 2];
         offset += 3;
         if (offset + innerLen > end) break;
         const v = buf.slice(offset, offset + innerLen);
@@ -355,8 +478,12 @@ function connectSerial(portPath, baudRate) {
             if (innerLen >= 4) fields.firmwareTick = v.readUInt32LE(0);
             break;
           case 0x0C:  // GUI_IND_VBUS_LEVEL (+ GUI_IND_IBUS_LEVEL packed)
-            if (innerLen >= 2) fields.vbusMv = v.readUInt16LE(0);
-            if (innerLen >= 4) fields.ibusMa = v.readUInt16LE(2);
+            if (innerLen >= 4) {
+              const packed = v.readUInt32LE(0);
+              fields.vbusMv = packed & 0xFFFF;
+              fields.ibusMa = (packed >>> 16) & 0xFFFF;
+              hasMeasurementPayload = true;
+            }
             break;
           default: {
             const key = `tag_0x${innerTag.toString(16).padStart(2, '0')}`;
@@ -366,10 +493,19 @@ function connectSerial(portPath, baudRate) {
         }
       }
 
+      const portRaw = (outerTag >> 5) & 0x03;
+      const portIndex = portRaw > 0 ? (portRaw - 1) : null;
+
+      // Ignore non-measurement notifications (e.g. PDO/event indications) in ADC stream.
+      if (!hasMeasurementPayload) {
+        return;
+      }
+
       broadcast({
         type:        'MEASURE_SAMPLE',
         ts:          Date.now(),
         outerTag,
+        port:        portIndex,
         raw:         rawHex,
         ...fields,
       });
@@ -495,23 +631,13 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: 'No serial port connected' }));
           break;
         }
-        const startCmd = Buffer.from([
-          0xFD, 0xFD, 0xFD, 0xFD,  // sync
-          0x26, 0x00,               // type 0x0026
-          0x04,                     // payload length
-          0x1A, 0x00, 0x01, 0x84,   // payload: MeasReportValue=4 (4×40ms=160ms), MeasReportActivation=1 (enable)
-          0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
-        ]);
-        activePort.write(startCmd, (err) => {
-          if (err) {
-            console.error('[Measure] MEASURE_START write error:', err.message);
-            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: err.message }));
-          } else {
-            console.log('[Measure] MEASURE_START command sent');
-            broadcast({ type: 'MEASURE_RUNNING', running: true });
-            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: true, cmd: 'start' }));
-          }
-        });
+        if (!guiInitDone) {
+          writeFramesSequentially(activePort, [GUI_INIT_REQ_CMD, GUI_INIT_REQ_PORT0_CMD], '[GUI] INIT_REQ before MEASURE_START');
+          console.log('[GUI] INIT_REQ sent before MEASURE_START (global + port1 fallback)');
+        }
+        pendingMeasureCmd = 'start';
+        writeFramesSequentially(activePort, [MEASURE_START_CMD, MEASURE_START_CMD_PORT1], '[Measure] MEASURE_START');
+        console.log('[Measure] MEASURE_START command sent (port0 + port1 fallback)');
         break;
       }
 
@@ -520,23 +646,10 @@ wss.on('connection', (ws, req) => {
           ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: 'No serial port connected' }));
           break;
         }
-        const stopCmd = Buffer.from([
-          0xFD, 0xFD, 0xFD, 0xFD,  // sync
-          0x26, 0x00,               // type 0x0026
-          0x04,                     // payload length
-          0x1A, 0x00, 0x01, 0x04,   // payload: MeasReportValue=4, MeasReportActivation=0 (disable)
-          0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
-        ]);
-        activePort.write(stopCmd, (err) => {
-          if (err) {
-            console.error('[Measure] MEASURE_STOP write error:', err.message);
-            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: err.message }));
-          } else {
-            console.log('[Measure] MEASURE_STOP command sent');
-            broadcast({ type: 'MEASURE_RUNNING', running: false });
-            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: true, cmd: 'stop' }));
-          }
-        });
+        clearMeasurePolling();
+        pendingMeasureCmd = 'stop';
+        writeFramesSequentially(activePort, [MEASURE_STOP_CMD, MEASURE_STOP_CMD_PORT1], '[Measure] MEASURE_STOP');
+        console.log('[Measure] MEASURE_STOP command sent (port0 + port1 fallback)');
         break;
       }
 

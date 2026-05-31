@@ -4,6 +4,58 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.6] - 2026-05-31
+
+### Added
+
+#### ADC Stream のライブメーター表示 (`client/src/components/MeasurePanel.jsx`, `client/src/components/MeasurePanel.module.css`)
+
+- 測定テーブル中心の表示を、**即値重視のデジタルVUメーター表示**へ刷新。
+- VBUS / IBUS を大型数値 + バーグラフで表示し、直近サンプルの min/max を併記。
+- FW Tick / Last Update を下段メタ情報として常時表示。
+
+#### Source PDO連動の自動レンジ設定 (`client/src/store/appStore.js`, `client/src/components/MeasurePanel.jsx`)
+
+- Source_Capabilities / EPR_Source_Capabilities 受信時に、宣言PDOからメーター上限値を自動再計算。
+- VBUS上限は宣言電圧最大値、IBUS上限は宣言電流最大値を採用。
+- 計算結果を `topology.measureScale` として保持し、メーター描画へ反映。
+
+### Changed
+
+#### 測定プロトコルのFW準拠化 (`server/cpdStreamParser.js`, `server/index.js`)
+
+- 外側/内側TLV長を **16-bit Big Endian** で扱うよう修正。
+- `GUI_IND_VBUS_LEVEL + GUI_IND_IBUS_LEVEL` の packed 32-bit値をデコードして VBUS/IBUS を復元。
+- 測定ACKを「シリアル書き込み成功」ではなく、FW応答タグ (`0x07` / `0x08`) で確定する方式へ変更。
+- **SNKモードのメッセージパースに対応**: `TRACE_MESSAGE_IN/OUT` (0x01/0x02) をSNK運用時の方向情報として取り扱い、測定/状態監視フローへ反映。
+
+#### SPYモード時の測定UX改善 (`client/src/components/MeasurePanel.jsx`, `client/src/store/appStore.js`)
+
+- `discoMode` 判定に基づき、SPYモードでは測定開始を抑止。
+- SPYモードでは timeout 監視を停止し、非対応ステータスを明示。
+
+### Fixed
+
+#### ADC Stream への非測定通知混入を防止 (`server/index.js`)
+
+- `DPM_MESSAGE_IND` 内で実測ペイロード (`0x0C`) を含まない通知を `MEASURE_SAMPLE` 配信対象から除外。
+- PDO遷移などのイベント通知がADC表示へ混在する問題を解消。
+
+#### ADC Streamの不要列削除 (`client/src/components/MeasurePanel.jsx`)
+
+- `Raw (hex)` 列を削除し、ユーザー向け表示を測定値中心へ整理。
+
+#### リリース番号更新 (`package.json`, `client/package.json`, `package-lock.json`, `docs/SPEC.md`, `docs/report-design.md`)
+
+- アプリバージョンを **3.2.6** に更新。
+
+### TODO
+
+- **SNKモード時のログ可視化改善**: TRACE_MESSAGE_IN/OUT を含むログメッセージを、運用時に方向・意味を視覚的に把握しやすい表現へ改善する。
+- **DISCO PDエンジン状態機械を意識した表現の検討**: PD Engine の状態遷移（PE/PRL/CADイベント）とログ表示の対応関係を明確化するUI/文言設計を検討課題とする。
+
+---
+
 ## [3.2.5] - 2026-04-19
 
 ### Added

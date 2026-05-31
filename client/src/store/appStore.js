@@ -12,6 +12,51 @@ const INIT_SOURCE  = { connected: false, pdRevision: null, eprActive: false, drd
 const INIT_EMARKER = { sop1Detected: false, sop2Detected: false, cableCurrentMa: null, maxVbusV: null, isActive: null, eprCapable: null };
 const INIT_SINK    = { connected: false, pdRevision: null, eprActive: false, drd: false, drp: false, altMode: false, discId: null, capabilities: [], srcCaps: [], lastRequest: null, status: null, skedb: null, vdmSeen: false };
 
+const INIT_MEASURE_MONITOR = {
+  phase: 'idle',
+  command: null,
+  lastCommandAt: null,
+  lastAckAt: null,
+  lastSampleAt: null,
+  lastError: null,
+};
+
+const INIT_MEASURE_SCALE = {
+  maxVbusMv: 24000,
+  maxIbusMa: 5000,
+};
+
+function deriveMeasureScaleFromSourceCaps(caps) {
+  let maxVbusMv = 0;
+  let maxIbusMa = 0;
+
+  for (const pdo of (caps ?? [])) {
+    if (!pdo || pdo.isSink) continue;
+
+    if (typeof pdo.vMv === 'number') {
+      maxVbusMv = Math.max(maxVbusMv, pdo.vMv);
+    }
+    if (typeof pdo.vMaxMv === 'number') {
+      maxVbusMv = Math.max(maxVbusMv, pdo.vMaxMv);
+    }
+
+    if (typeof pdo.iMa === 'number') {
+      maxIbusMa = Math.max(maxIbusMa, pdo.iMa);
+    }
+    if (typeof pdo.iMa_9_15 === 'number') {
+      maxIbusMa = Math.max(maxIbusMa, pdo.iMa_9_15);
+    }
+    if (typeof pdo.iMa_15_20 === 'number') {
+      maxIbusMa = Math.max(maxIbusMa, pdo.iMa_15_20);
+    }
+  }
+
+  return {
+    maxVbusMv: maxVbusMv > 0 ? maxVbusMv : INIT_MEASURE_SCALE.maxVbusMv,
+    maxIbusMa: maxIbusMa > 0 ? maxIbusMa : INIT_MEASURE_SCALE.maxIbusMa,
+  };
+}
+
 export const INITIAL_TOPOLOGY = {
   source:  { ...INIT_SOURCE },
   eMarker: { ...INIT_EMARKER },
@@ -21,6 +66,7 @@ export const INITIAL_TOPOLOGY = {
   ccPin:   null,
   prSwapPending: false,
   eprSrcCapsAccum: [],   // accumulated EPR_Source_Capabilities DOs across chunks
+  measureScale: { ...INIT_MEASURE_SCALE },
   // 'SPY' = passive spy mode (TRACE_SRC/SNK 0x07/0x08),
   // 'SNK' = DISCO itself is the sink device (TRACE_MESSAGE_IN/OUT 0x01/0x02)
   discoMode: null,
@@ -133,11 +179,13 @@ function applyFrameToTopo(topo, frame) {
           skedb:        null,
           vdmSeen:      false,
         };
+        next.measureScale = deriveMeasureScaleFromSourceCaps(caps);
         next.prSwapPending = false;
       } else {
         // Normal: source advertising caps
         next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, drp, capabilities: caps };
         next.sink   = { ...next.sink,   connected: true };
+        next.measureScale = deriveMeasureScaleFromSourceCaps(caps);
       }
 
     } else if (typeName === 'EPR_Source_Capabilities' && isSrcDir) {
@@ -167,6 +215,7 @@ function applyFrameToTopo(topo, frame) {
         const drp  = !!(caps[0]?.dualRolePower);
         next.source = { ...next.source, connected: true, pdRevision: header.specRevision, drd, drp, capabilities: caps };
         next.sink   = { ...next.sink,   connected: true };
+        next.measureScale = deriveMeasureScaleFromSourceCaps(caps);
       }
 
     } else if (typeName === 'Sink_Capabilities') {
@@ -399,11 +448,17 @@ export const useAppStore = create((set, get) => ({
   // Ring buffer of the last MAX_MEASURE_SAMPLES samples broadcast by the server.
   measureSamples: [],
   measureRunning: false,
+  measureMonitor: { ...INIT_MEASURE_MONITOR },
   addMeasureSample: (sample) =>
     set((state) => ({
       measureSamples: [...state.measureSamples.slice(-(200 - 1)), sample],
     })),
   setMeasureRunning: (running) => set({ measureRunning: running }),
   clearMeasureSamples: () => set({ measureSamples: [] }),
+  setMeasureMonitor: (patch) =>
+    set((state) => ({
+      measureMonitor: { ...state.measureMonitor, ...patch },
+    })),
+  resetMeasureMonitor: () => set({ measureMonitor: { ...INIT_MEASURE_MONITOR } }),
 }));
 

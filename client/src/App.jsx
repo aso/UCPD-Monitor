@@ -233,7 +233,7 @@ export default function App() {
       )}
 
       {/* ADC Measurement Stream panel */}
-      {showMeasure && <MeasurePanel sendMessage={sendMessage} />}
+      {showMeasure && <MeasurePanel sendMessage={sendMessage} onShowConsole={() => setShowConsole(true)} />}
     </div>
   );
 }

@@ -12,7 +12,6 @@
   overflow: hidden;
 }
 
-/* ── Toolbar ────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
   align-items: center;
@@ -35,8 +34,15 @@
   border-radius: 50%;
   flex-shrink: 0;
 }
-.dotActive { background: #3fb950; box-shadow: 0 0 4px #3fb950; }
-.dotIdle   { background: #484f58; }
+
+.dotActive {
+  background: #3fb950;
+  box-shadow: 0 0 4px #3fb950;
+}
+
+.dotIdle {
+  background: #484f58;
+}
 
 .btnStart,
 .btnStop,
@@ -49,13 +55,43 @@
   font-family: inherit;
   transition: opacity 0.15s;
 }
-.btnStart         { background: #1f4829; color: #3fb950; border-color: #238636; }
-.btnStart:hover:not(:disabled) { background: #238636; color: #fff; }
-.btnStop          { background: #3d1f1f; color: #f85149; border-color: #da3633; }
-.btnStop:hover:not(:disabled)  { background: #da3633; color: #fff; }
-.btnClear         { background: #21262d; color: #8b949e; }
-.btnClear:hover   { background: #30363d; color: #c9d1d9; }
-button:disabled   { opacity: 0.38; cursor: default; }
+
+.btnStart {
+  background: #1f4829;
+  color: #3fb950;
+  border-color: #238636;
+}
+
+.btnStart:hover:not(:disabled) {
+  background: #238636;
+  color: #fff;
+}
+
+.btnStop {
+  background: #3d1f1f;
+  color: #f85149;
+  border-color: #da3633;
+}
+
+.btnStop:hover:not(:disabled) {
+  background: #da3633;
+  color: #fff;
+}
+
+.btnClear {
+  background: #21262d;
+  color: #8b949e;
+}
+
+.btnClear:hover {
+  background: #30363d;
+  color: #c9d1d9;
+}
+
+button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
 
 .count {
   margin-left: auto;
@@ -63,7 +99,6 @@ button:disabled   { opacity: 0.38; cursor: default; }
   font-size: 11px;
 }
 
-/* Live readout (latest VBUS / IBUS displayed in toolbar) */
 .liveReadout {
   display: flex;
   align-items: center;
@@ -72,109 +107,128 @@ button:disabled   { opacity: 0.38; cursor: default; }
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-.liveVbus { color: #e3b341; font-weight: 600; }
-.liveSep  { color: #484f58; }
-.liveIbus { color: #79c0ff; font-weight: 600; }
 
-/* ── Table ──────────────────────────────────────────────────── */
-.tableWrap {
-  overflow-y: auto;
-  overflow-x: auto;
-  flex: 1;
-}
-
-.table {
-  border-collapse: collapse;
-  width: 100%;
-  table-layout: auto;
-}
-
-.table thead {
-  position: sticky;
-  top: 0;
-  background: #161b22;
-  z-index: 1;
-}
-
-.thTs {
-  padding: 4px 8px;
-  text-align: left;
-  color: #8b949e;
-  border-bottom: 1px solid #30363d;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.thVal {
-  padding: 4px 10px;
-  text-align: right;
-  color: #8b949e;
-  border-bottom: 1px solid #30363d;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.thTick {
-  padding: 4px 8px;
-  text-align: right;
-  color: #8b949e;
-  border-bottom: 1px solid #30363d;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.thHex {
-  padding: 4px 8px;
-  text-align: left;
-  color: #8b949e;
-  border-bottom: 1px solid #30363d;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.row:nth-child(odd) { background: #0d1117; }
-.row:nth-child(even) { background: #161b22; }
-.row:hover { background: #1c2128; }
-
-.tdTs {
-  padding: 2px 8px;
-  white-space: nowrap;
-  color: #8b949e;
-}
-
-.tdVbus {
-  padding: 2px 10px;
-  text-align: right;
-  white-space: nowrap;
+.liveVbus {
   color: #e3b341;
-  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
-.tdIbus {
-  padding: 2px 10px;
-  text-align: right;
-  white-space: nowrap;
+.liveSep {
+  color: #484f58;
+}
+
+.liveIbus {
   color: #79c0ff;
+  font-weight: 600;
+}
+
+.meterWrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 10px;
+  background: radial-gradient(120% 160% at 20% -20%, #1a2330 0%, #0d1117 45%, #0a0d12 100%);
+}
+
+.meterGrid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.meterCard {
+  border: 1px solid #2c3542;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #141b24 0%, #0f141c 100%);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.meterHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.meterLabel {
+  letter-spacing: 0.08em;
+  color: #8b949e;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.meterPercent {
+  color: #6e7681;
+  font-size: 10px;
+}
+
+.meterValueV,
+.meterValueI {
+  font-variant-numeric: tabular-nums;
+  font-size: 30px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.meterValueV {
+  color: #e3b341;
+  text-shadow: 0 0 8px rgba(227, 179, 65, 0.18);
+}
+
+.meterValueI {
+  color: #79c0ff;
+  text-shadow: 0 0 8px rgba(121, 192, 255, 0.18);
+}
+
+.meterTrack {
+  height: 12px;
+  border-radius: 999px;
+  background: #0b0f15;
+  border: 1px solid #242d39;
+  overflow: hidden;
+}
+
+.meterFillV,
+.meterFillI {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 140ms linear;
+}
+
+.meterFillV {
+  background: linear-gradient(90deg, #856205 0%, #c9971a 45%, #f1be3a 100%);
+}
+
+.meterFillI {
+  background: linear-gradient(90deg, #125189 0%, #1f74c9 45%, #57a7ff 100%);
+}
+
+.meterRange {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #6e7681;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
-.tdTick {
-  padding: 2px 8px;
-  text-align: right;
-  white-space: nowrap;
-  color: #6e7681;
-  font-size: 10px;
+.metaRow {
+  border-top: 1px solid #2c3542;
+  padding-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #8b949e;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
-.tdHex {
-  padding: 2px 8px;
-  color: #6e7681;
-  white-space: nowrap;
-  font-size: 10px;
-  letter-spacing: 0.03em;
-}
-
-/* ── Empty state ────────────────────────────────────────────── */
 .empty {
   flex: 1;
   display: flex;
@@ -182,4 +236,19 @@ button:disabled   { opacity: 0.38; cursor: default; }
   justify-content: center;
   color: #484f58;
   padding: 20px;
+}
+
+@media (max-width: 880px) {
+  .meterGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .metaRow {
+    flex-direction: column;
+  }
+
+  .meterValueV,
+  .meterValueI {
+    font-size: 26px;
+  }
 }

@@ -59,7 +59,7 @@ function logUnknownRecords(records) {
 export function useWebSocket() {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
-  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames, setImportStatus, setReplayNote, clearReplayNote, setTsAnchor, addMeasureSample, setMeasureRunning } = useAppStore();
+  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames, setImportStatus, setReplayNote, clearReplayNote, setTsAnchor, addMeasureSample, setMeasureRunning, setMeasureMonitor, resetMeasureMonitor } = useAppStore();
   // Tracks the firmware tick of the most recent ATTACHED event seen in live stream
   const pendingAttachedTickRef = useRef(null);
   // tPSSourceOn timer: Accept seen from SRC — expect PS_RDY within 480 ms (§8.3.3.2.5)
@@ -221,6 +221,9 @@ export function useWebSocket() {
             baudRate:  payload.baudRate ?? null,
             error:     payload.error ?? null,
           });
+          if (!payload.connected) {
+            resetMeasureMonitor();
+          }
           if (payload.error) appendLog(`[Serial] Error: ${payload.error}`);
           else if (payload.connected) appendLog(`[Serial] Connected: ${payload.port} @ ${payload.baudRate}`);
           else appendLog('[Serial] Disconnected');
@@ -239,17 +242,40 @@ export function useWebSocket() {
             vbusMv:       payload.vbusMv       ?? null,
             ibusMa:       payload.ibusMa       ?? null,
           });
+          setMeasureMonitor({
+            phase: 'streaming',
+            lastSampleAt: payload.ts ?? Date.now(),
+            lastError: null,
+          });
           break;
 
         case 'MEASURE_RUNNING':
           setMeasureRunning(!!payload.running);
+          if (!payload.running) {
+            setMeasureMonitor({ phase: 'idle' });
+          }
+          break;
+
+        case 'MEASURE_ACK':
+          setMeasureMonitor({
+            phase: payload.ok
+              ? (payload.cmd === 'start' ? 'awaiting-sample' : 'idle')
+              : 'error',
+            lastAckAt: Date.now(),
+            lastError: payload.ok ? null : (payload.error ?? 'unknown error'),
+          });
+          if (payload.ok) {
+            appendLog(`[Measure] ${payload.cmd ?? 'request'} acknowledged`);
+          } else {
+            appendLog(`[Measure] Error: ${payload.error ?? 'unknown error'}`);
+          }
           break;
 
         default:
           appendLog(`[WS] Unknown type: ${payload.type}`);
       }
     },
-    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump, clearMessages, setMessages, replayFrames, setTsAnchor, setReplayNote, clearReplayNote, addMeasureSample, setMeasureRunning]
+    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump, clearMessages, setMessages, replayFrames, setTsAnchor, setReplayNote, clearReplayNote, addMeasureSample, setMeasureRunning, setMeasureMonitor, resetMeasureMonitor]
   );
 
   const connect = useCallback(() => {

@@ -69,7 +69,7 @@ export interface PdoApdoPps extends DoBase {
 }
 
 export interface PdoApdoAvsEpr extends DoBase {
-  readonly pdoType: 'APDO_AVS';
+  readonly pdoType: 'APDO_EPR_AVS';
   readonly isSink: boolean;
   readonly vMaxMv: number;
   readonly vMinMv: number;

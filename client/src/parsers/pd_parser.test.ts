@@ -394,7 +394,7 @@ describe('decodePDO — APDO_SPR_AVS', () => {
   });
 });
 
-describe('decodePDO — APDO_AVS (EPR)', () => {
+describe('decodePDO — APDO_EPR_AVS', () => {
   // USB PD Rev 3.2 v1.0 2023-10 §6.4.1.2.5.2, Table 6.14 "EPR Adjustable Voltage Supply APDO – Source"
   // Bit-field layout (Source only; applies when EPR Mode active, 15V–48V):
   //   B31:30 = 11b  — Augmented Power Data Object (APDO)
@@ -415,7 +415,7 @@ describe('decodePDO — APDO_AVS (EPR)', () => {
     const pdpW = 100;       //       B7:0
     const word = (0b11 << 30) | (0b01 << 28) | (vmax << 17) | (vmin << 8) | pdpW;
     const pdo  = decodePDO(word >>> 0, 7, false) as PdoApdoAvsEpr;
-    expect(pdo.pdoType).toBe('APDO_AVS');
+    expect(pdo.pdoType).toBe('APDO_EPR_AVS');
     expect(pdo.vMaxMv).toBe(28000);
     expect(pdo.vMinMv).toBe(15000);
     expect(pdo.pdpW).toBe(100);
@@ -532,7 +532,7 @@ describe('buildPdoSummary', () => {
     expect(s).toContain('AVS:');
   });
 
-  it('EPR: filters 0xD0000000 (APDO_AVS type bits only, zero value fields)', () => {
+  it('EPR: filters 0xD0000000 (APDO_EPR_AVS type bits only, zero value fields)', () => {
     // 0xD0000000 → bits31:28=1101 → pdoType=11(APDO), apdoType=01(AVS), value bits=0
     // (dw & 0x0FFFFFFF) === 0 → filtered
     const dos = [
@@ -603,7 +603,7 @@ describe('buildPdoSummary', () => {
     // EPR AVS PDO summary: [n] AVS:${vMin}-${vMax}/${pdpW}W
     const word = (0b11 << 30) | (0b01 << 28) | (280 << 17) | (150 << 8) | 100;
     const s = buildPdoSummary('EPR_Source_Capabilities', [word], 0);
-    expect(s).toContain('[1] AVS:15V-28V/100W');
+    expect(s).toContain('[1] EPR-AVS:15V-28V/100W');
   });
 });
 
@@ -654,7 +654,7 @@ describe('decodeRDO — AVS', () => {
   it('AVS RDO: 20V / 3A', () => {
     // outVoltage=20000/25=800→B20:9; opCurrent=3000/50=60→B6:0
     const word = (6 << 28) | (800 << 9) | 60;
-    const rdo  = decodeRDO(word >>> 0, 'APDO_AVS');
+    const rdo  = decodeRDO(word >>> 0, 'APDO_EPR_AVS');
     expect(rdo.rdoType).toBe('AVS');
     expect(rdo.opVoltage_mV).toBe(20000);
     expect(rdo.opCurrent_mA).toBe(3000);
@@ -688,7 +688,7 @@ describe('buildRdoSummary', () => {
 
   it('AVS summary format', () => {
     const word = (6 << 28) | (800 << 9) | 60;
-    expect(buildRdoSummary(word >>> 0, 'APDO_AVS')).toMatch(/PDO#6.*Out:20V.*Op:3A/);
+    expect(buildRdoSummary(word >>> 0, 'APDO_EPR_AVS')).toMatch(/PDO#6.*Out:20V.*Op:3A/);
   });
 
   it('CapMismatch appended', () => {
@@ -959,7 +959,7 @@ describe('decodeDataObjects — Source_Capabilities', () => {
     const dos = [0x00000000, (0b11 << 30) | (0b01 << 28) | (280 << 17) | (150 << 8) | 100];
     const rows = decodeDataObjects('EPR_Source_Capabilities', dos);
     expect(rows).toHaveLength(1);
-    expect((rows![0] as any).pdoType).toBe('APDO_AVS');
+    expect((rows![0] as any).pdoType).toBe('APDO_EPR_AVS');
   });
 });
 
@@ -979,7 +979,7 @@ describe('decodeDataObjects — EPR_Request', () => {
   it('decodes EPR RDO and mirror PDO', () => {
     const rdoWord = (6 << 28) | (800 << 9) | 60;
     const mirrorPdo = (0b11 << 30) | (0b01 << 28) | (280 << 17) | (150 << 8) | 100;
-    const rows = decodeDataObjects('EPR_Request', [rdoWord >>> 0, mirrorPdo >>> 0], 'APDO_AVS');
+    const rows = decodeDataObjects('EPR_Request', [rdoWord >>> 0, mirrorPdo >>> 0], 'APDO_EPR_AVS');
     expect(rows).toHaveLength(2);
     expect((rows![0] as any).rdoType).toBe('AVS');
     expect((rows![1] as any).eprMirror).toBe(true);

@@ -199,6 +199,45 @@ function resetSessionFile() {
   console.log('[CPD] Session file rotated');
 }
 
+/**
+ * Build a .cpd binary frame for a user note (dir=0x06, payload="NOTE:<text>" UTF-8).
+ * Max payload: 240 bytes (enforced here; cat byte must fit in uint8).
+ * @param {string} text  User memo text (already validated/trimmed by caller)
+ * @returns {Buffer}
+ */
+function buildUserNoteFrame(text) {
+  const prefixed   = `NOTE:${text}`;
+  let   payload    = Buffer.from(prefixed, 'utf8');
+  if (payload.length > 240) payload = payload.slice(0, 240);   // hard cap
+
+  const payloadLen = payload.length;
+  const frame      = Buffer.alloc(20 + payloadLen);
+
+  // Sync: FD FD FD FD
+  frame[0] = 0xFD; frame[1] = 0xFD; frame[2] = 0xFD; frame[3] = 0xFD;
+  // FixedField: 32 00 (LE)
+  frame[4] = 0x32; frame[5] = 0x00;
+  // Cat = payloadLen + 9
+  frame[6] = payloadLen + 9;
+  // Dir = 0x06 (ASCII_LOG / DEBUG)
+  frame[7] = 0x06;
+  // Timestamp: wall-clock ms as LE uint32
+  frame.writeUInt32LE(Date.now() >>> 0, 8);
+  // Pad0, SopQual=0x00, Pad1
+  frame[12] = 0x00; frame[13] = 0x00; frame[14] = 0x00;
+  // PayloadLen
+  frame[15] = payloadLen;
+  // Payload
+  payload.copy(frame, 16);
+  // Sentinel: A5 A5 A5 A5
+  frame[16 + payloadLen] = 0xA5;
+  frame[17 + payloadLen] = 0xA5;
+  frame[18 + payloadLen] = 0xA5;
+  frame[19 + payloadLen] = 0xA5;
+
+  return frame;
+}
+
 // Open initial session file on startup
 openSessionFile();
 
@@ -286,6 +325,56 @@ function connectSerial(portPath, baudRate) {
 
     sp.pipe(parser);
 
+    // Each complete non-CPD TLV frame (command response, measurement stream, etc.) → broadcast raw
+    parser.on('measure_frame', (buf) => {
+      // Outer TLV envelope: [sync:4][tag:1][rsvd:1][len:1][value:len][sentinel:4]
+      // Value is a sequence of inner TLVs:  [tag:1][rsvd:1][len:1][value:len] ...
+      // Known inner tags (USBPD_GUI_Tag_Indication):
+      //   0x13 = GUI_IND_TIMESTAMP  → LE uint32 firmware tick
+      //   0x0C = GUI_IND_VBUS_LEVEL + GUI_IND_IBUS_LEVEL (packed)
+      //          bytes [0-1]: VBUS in mV (LE uint16)
+      //          bytes [2-3]: IBUS in mA (LE uint16)
+      const outerTag = buf[4];
+      const tlvLen   = buf[6];
+      const rawHex   = buf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+
+      // Parse inner TLV sequence
+      const fields = {};
+      let offset = 7;
+      const end   = 7 + tlvLen;
+      while (offset + 3 <= end) {
+        const innerTag = buf[offset];
+        // buf[offset + 1] is reserved, always 0x00
+        const innerLen = buf[offset + 2];
+        offset += 3;
+        if (offset + innerLen > end) break;
+        const v = buf.slice(offset, offset + innerLen);
+        offset += innerLen;
+        switch (innerTag) {
+          case 0x13:  // GUI_IND_TIMESTAMP
+            if (innerLen >= 4) fields.firmwareTick = v.readUInt32LE(0);
+            break;
+          case 0x0C:  // GUI_IND_VBUS_LEVEL (+ GUI_IND_IBUS_LEVEL packed)
+            if (innerLen >= 2) fields.vbusMv = v.readUInt16LE(0);
+            if (innerLen >= 4) fields.ibusMa = v.readUInt16LE(2);
+            break;
+          default: {
+            const key = `tag_0x${innerTag.toString(16).padStart(2, '0')}`;
+            fields[key] = v.toString('hex').toUpperCase();
+            break;
+          }
+        }
+      }
+
+      broadcast({
+        type:        'MEASURE_SAMPLE',
+        ts:          Date.now(),
+        outerTag,
+        raw:         rawHex,
+        ...fields,
+      });
+    });
+
     // Each complete CPD record → classify → persist → broadcast
     parser.on('frame', (buf) => {
       const eventType = cpdEventType(buf);
@@ -306,6 +395,23 @@ function connectSerial(portPath, baudRate) {
       if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
 
       broadcast({ type: 'CPD_RECORD', hex, ts });
+
+      if (eventType === 'ATTACHED') {
+        // Inject a timestamp marker immediately after the ATTACHED event so that
+        // replays always carry a human-readable connection timestamp.
+        const now        = new Date();
+        const pad        = (n, w = 2) => String(n).padStart(w, '0');
+        const timeStr    = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+                           ` ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        const markerBuf  = buildUserNoteFrame(timeStr);
+        if (sessionFileStream) sessionFileStream.write(markerBuf);
+        const markerHex  = markerBuf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+        const markerTs   = Date.now();
+        recordHistory.push({ hex: markerHex, ts: markerTs });
+        if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
+        broadcast({ type: 'CPD_RECORD', hex: markerHex, ts: markerTs });
+        console.log(`[CPD] ATTACHED timestamp marker: ${timeStr}`);
+      }
     });
 
     sp.on('error', (e) => {
@@ -383,6 +489,77 @@ wss.on('connection', (ws, req) => {
       case 'SERIAL_DISCONNECT':
         disconnectSerial('user request');
         break;
+
+      case 'MEASURE_START': {
+        if (!activePort) {
+          ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: 'No serial port connected' }));
+          break;
+        }
+        const startCmd = Buffer.from([
+          0xFD, 0xFD, 0xFD, 0xFD,  // sync
+          0x26, 0x00,               // type 0x0026
+          0x04,                     // payload length
+          0x1A, 0x00, 0x01, 0x84,   // payload: MeasReportValue=4 (4×40ms=160ms), MeasReportActivation=1 (enable)
+          0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
+        ]);
+        activePort.write(startCmd, (err) => {
+          if (err) {
+            console.error('[Measure] MEASURE_START write error:', err.message);
+            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: err.message }));
+          } else {
+            console.log('[Measure] MEASURE_START command sent');
+            broadcast({ type: 'MEASURE_RUNNING', running: true });
+            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: true, cmd: 'start' }));
+          }
+        });
+        break;
+      }
+
+      case 'MEASURE_STOP': {
+        if (!activePort) {
+          ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: 'No serial port connected' }));
+          break;
+        }
+        const stopCmd = Buffer.from([
+          0xFD, 0xFD, 0xFD, 0xFD,  // sync
+          0x26, 0x00,               // type 0x0026
+          0x04,                     // payload length
+          0x1A, 0x00, 0x01, 0x04,   // payload: MeasReportValue=4, MeasReportActivation=0 (disable)
+          0xA5, 0xA5, 0xA5, 0xA5,   // sentinel
+        ]);
+        activePort.write(stopCmd, (err) => {
+          if (err) {
+            console.error('[Measure] MEASURE_STOP write error:', err.message);
+            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: false, error: err.message }));
+          } else {
+            console.log('[Measure] MEASURE_STOP command sent');
+            broadcast({ type: 'MEASURE_RUNNING', running: false });
+            ws.send(JSON.stringify({ type: 'MEASURE_ACK', ok: true, cmd: 'stop' }));
+          }
+        });
+        break;
+      }
+
+      case 'WRITE_USER_NOTE': {
+        // Append a user-authored memo packet to the current session .cpd file.
+        const rawText = String(parsed.text ?? '').trim();
+        if (!rawText) {
+          ws.send(JSON.stringify({ type: 'NOTE_ACK', ok: false, error: 'text is required' }));
+          break;
+        }
+        const noteBuf = buildUserNoteFrame(rawText);
+        // Write to session file (always open)
+        if (sessionFileStream) sessionFileStream.write(noteBuf);
+        // Push to ring buffer so browser-reload replay includes the note
+        const noteHex = noteBuf.toString('hex').toUpperCase().match(/.{2}/g).join(' ');
+        recordHistory.push({ hex: noteHex, ts: Date.now() });
+        if (recordHistory.length > MAX_HISTORY) recordHistory.shift();
+        // Broadcast to all connected clients so the live message list updates
+        broadcast({ type: 'CPD_RECORD', hex: noteHex, ts: Date.now() });
+        console.log(`[Note] User note appended: "${rawText}"`);
+        ws.send(JSON.stringify({ type: 'NOTE_ACK', ok: true }));
+        break;
+      }
 
       default:
         console.warn(`[WS] Unknown message type: ${parsed.type}`);
@@ -576,10 +753,12 @@ function startServer(port) {
       resolve(p);
     }).on('error', async (err) => {
       if (err.code === 'EADDRINUSE') {
-        // ── Electron (production) context: never probe or displace ────────
-        // When loaded by electron/main.js, process.versions.electron is set.
-        // End-user Electron builds must not send any bytes to unknown owners.
-        if (process.versions.electron) {
+        // ── Electron (dev) context: displace old dev instance ─────────────
+        // process.versions.electron is set when loaded by electron/main.js.
+        // In packaged (production) builds app.isPackaged would be true, but we
+        // cannot read it here — use a dedicated env flag instead so the caller
+        // (main.js) can opt-in to displacement explicitly.
+        if (process.versions.electron && !process.env.UCPD_ALLOW_DISPLACE) {
           reject(new Error(
             `Port ${p} is already in use. ` +
             'Cannot displace another process from an Electron build.'

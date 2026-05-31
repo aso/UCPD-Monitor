@@ -13,7 +13,7 @@
 ║  │  [SrcSpecBadge]                                      │   ║
 ║  │  ┌──────────────────────────────────────────────┐   │   ║
 ║  │  │ 🏷 Vendor Name  PID  ⚠ VID mismatch         │   │   ║
-║  │  │ [EPR RDY] [Cap_Ext] [DRD] [Alt Mode] [VDM]  │   │   ║
+║  │  │ [EPR_RDY] [Cap_Ext] [DRP] [DRD] [Alt Mode] [VDM] │  │   ║
 ║  │  │                                    45W       │   │   ║
 ║  │  └──────────────────────────────────────────────┘   │   ║
 ║  │                                                      │   ║
@@ -39,7 +39,7 @@
 ║  │  [SinkSpecBadge]                                     │   ║
 ║  │  ┌──────────────────────────────────────────────┐   │   ║
 ║  │  │ 🏷 Vendor Name  PID  ⚠ VID mismatch         │   │   ║
-║  │  │ [EPR RDY] [Cap_Ext] [DRD] [Alt Mode] [VDM]  │   │   ║
+║  │  │ [EPR_RDY] [Cap_Ext] [DRP] [DRD] [Alt Mode] [VDM] │  │   ║
 ║  │  │                                    100W      │   │   ║
 ║  │  └──────────────────────────────────────────────┘   │   ║
 ║  │                                                      │   ║
@@ -56,7 +56,7 @@ SOURCE / SINK 各ノードの最上部に表示されるコンパクトなバッ
 `SrcSpecBadge` / `SinkSpecBadge` コンポーネントが担当。
 
 **バッジ全体が非表示になる条件:** 以下をすべて満たす場合は `null` を返す  
-→ `scdb/skedb` が空 かつ `eprActive=false` かつ `vdmSeen=false` かつ `drd=false` かつ `altMode=false`
+→ `scdb/skedb` が空 かつ `eprActive=false` かつ `eprCapFromCaps=false` (SRC のみ) かつ `vdmSeen=false` かつ `drp=false` かつ `drd=false` かつ `altMode=false`
 
 ### ① - A　ベンダー行 (Vendor Row)
 
@@ -71,21 +71,22 @@ SOURCE / SINK 各ノードの最上部に表示されるコンパクトなバッ
 ### ① - B　バッジ行 (Badge Row)
 
 ```
-[EPR RDY] [Cap_Ext] [DRD] [Alt Mode] [VDM]  45W
+[EPR_RDY] [Cap_Ext] [DRP] [DRD] [Alt Mode] [VDM]  45W
 ```
 
 | バッジ | テキスト色 | ボーダー色 | 背景 | CSS クラス | 表示条件 |
 |---|---|---|---|---|---|
-| **EPR RDY** | `#7ab07a` 緑 | `#3a6a3a` 暗緑 | — | `sinkSpecEpr` | `eprActive=true` または SCDB/SKEDB で EPR PDP > 0 |
+| **EPR_RDY** | `#7ab07a` 緑 | `#3a6a3a` 暗緑 | — | `sinkSpecEpr` | `eprActive=false` かつ (SCDB/SKEDB で EPR PDP > 0、または SRC Capabilities PDO の `eprModeCapable` フラグが 1) |
 | **Cap_Ext** | `#90caf9` 水色 | `#2a4a6a` 紺 | — | `sinkSpecCap` | SCDB（SRC）/ SKEDB（SNK）受信済み |
-| **DRD** | `#ce93d8` 紫 | `#5a3a6a` 暗紫 | — | `sinkSpecDrd` | Fixed PDO #1 の Data Role Swap ビット (B25) = 1 |
+| **DRP** | `#ffd54f` 黄 | `#6a5a00` 暗金 | — | `sinkSpecDrp` | Fixed PDO #1 の Dual Role Power ビット (B29) = 1 |
+| **DRD** | `#ce93d8` 紫 | `#5a3a6a` 暗紫 | — | `sinkSpecDrd` | Fixed PDO #1 の Dual Role Data ビット (B25) = 1 |
 | **Alt Mode** | `#ffcc80` 橙 | `#6a4a20` 茶 | — | `sinkSpecAlt` | ID Header VDO の Alt Mode Support ビット (B26) = 1 |
 | **VDM** | `#90caf9` 水色 | `#2a4a6a` 紺 | — | `sinkSpecCap` | VDM トラフィックを受信 (`vdmSeen=true`) |
 | **PDP 値** (例: `45W`) | `#a5d6a7` 薄緑 | — | — | `sinkSpecPdp` | SCDB/SKEDB に SPR PDP Rating または EPR PDP Rating が存在 |
 
-> **EPR RDY と Cap_Ext の関係**  
+> **EPR_RDY と Cap_Ext の関係**  
 > `Cap_Ext` は Source/Sink Capabilities Extended メッセージ（Extended Message）を実際に受信した場合のみ表示。  
-> `EPR RDY` は上記受信前でも `eprActive=true`（EPR Contract 成立）であれば表示される。
+> `EPR_RDY` は EPR コントラクト未確立 (`eprActive=false`) の状態でも、EPR 対応能力が確認できれば表示される（SCDB/SKEDB の EPR PDP Rating、または Source Capabilities PDO の `eprModeCapable` ビット）。EPR コントラクト確立後 (`eprActive=true`) は非表示になる。
 
 ---
 
@@ -99,7 +100,7 @@ CapList 内の各 PDO 行の先頭に表示される PDO 種別チップ。
 #2 [Battery]  5.0–20.0V   100W
 #3 [Variable] 3.0–20.0V   3.00A
 #4 [PPS]      3.30–11.00V   5.00A
-#5 [AVS]      15.00–48.00V   140W
+#5 [EPR-AVS]  15.00–48.00V   140W
 #6 [SPR-AVS]  3.30–20.00V
 ```
 
@@ -109,10 +110,10 @@ CapList 内の各 PDO 行の先頭に表示される PDO 種別チップ。
 | `Battery` | `Battery` | `#ffcc80` オレンジ | バッテリー PDO（电力ベース） |
 | `Variable` | `Variable` | `#b39ddb` ラベンダー | 可変電圧 PDO |
 | `APDO_PPS` | `PPS` | `#a5d6a7` 薄緑 | Programmable Power Supply |
-| `APDO_AVS` | `AVS` | `#f48fb1` ピンク | Adjustable Voltage Supply (EPR) |
+| `APDO_EPR_AVS` | `EPR-AVS` | `#f48fb1` ピンク | Adjustable Voltage Supply (EPR) |
 | `APDO_SPR_AVS` | `SPR-AVS` | `#ce93d8` 薄紫 | SPR Adjustable Voltage Supply |
 
-チップのスタイル: テキスト色・ボーダー=`PDO_COLORS[type]`、背景=`PDO_COLORS[type] + '22'`（22% 透過）
+チップのスタイル: テキスト色・ボーダー=`PDO_COLOR[type]`、背景=`PDO_COLOR[type] + '22'`（22% 透過）。`PDO_COLOR` / `PDO_BADGE` は `client/src/data/pdoMeta.ts` から import。
 
 ---
 
@@ -151,14 +152,15 @@ CABLE ノードのプロパティツリー内に表示される。チップ形�
 色見本     色コード    使われるバッジ
 ─────────  ─────────  ─────────────────────────────────────
 ■ シアン   #80deea    Fixed PDO、Vendor Name
-■ 薄緑     #7ab07a    EPR RDY
+■ 薄緑     #7ab07a    EPR_RDY
 ■ 水色     #90caf9    Cap_Ext、VDM
 ■ 紫       #ce93d8    DRD、SPR-AVS PDO
 ■ 橙 (薄)  #ffcc80    Alt Mode、Battery PDO
-■ ピンク   #f48fb1    AVS PDO
+■ ピンク   #f48fb1    EPR-AVS PDO
 ■ ラベンダー #b39ddb  Variable PDO
 ■ 薄緑     #a5d6a7    PDP値、PPS PDO、SPR Mode、3A Cable
 ■ オレンジ #ff9800    EPR Mode、EPR Capable、VID mismatch
+■ 黄       #ffd54f    DRP
 ■ 橙 (明)  #ffb74d    5A Cable
 ■ グレー   #888       EPR Capable: No、Default Cable
 ```
@@ -169,16 +171,17 @@ CABLE ノードのプロパティツリー内に表示される。チップ形�
 
 | バッジ | コンポーネント/関数 | CSS クラス |
 |---|---|---|
-| SrcSpecBadge 全体 | `SrcSpecBadge()` L.706 | `sinkSpecBadge` |
-| SinkSpecBadge 全体 | `SinkSpecBadge()` L.762 | `sinkSpecBadge` |
+| SrcSpecBadge 全体 | `SrcSpecBadge()` L.721 in `TopologyView.jsx` | `sinkSpecBadge` |
+| SinkSpecBadge 全体 | `SinkSpecBadge()` L.780 in `TopologyView.jsx` | `sinkSpecBadge` |
 | Vendor Name | — | `sinkSpecVendorName` |
 | PID / VID 表示 | — | `sinkSpecPid` |
 | ⚠ VID mismatch | — | `sinkSpecWarn` |
-| EPR RDY | — | `sinkSpecEpr` |
+| EPR_RDY | — | `sinkSpecEpr` |
 | Cap_Ext / VDM | — | `sinkSpecCap` |
+| DRP | — | `sinkSpecDrp` |
 | DRD | — | `sinkSpecDrd` |
 | Alt Mode | — | `sinkSpecAlt` |
 | PDP 値 | — | `sinkSpecPdp` |
-| PDO type chip | `pdoBadge()` L.102 + `PDO_COLORS` L.73 | `capBadgeChip` |
-| e-Marker 各行 | `buildCableItems()` L.397 | PropTree（色テキスト） |
-| Mode (EPR/SPR) | `buildSourceItems()` L.142 | PropTree（色テキスト） |
+| PDO type chip | `pdoBadge()` L.99 + `PDO_COLOR` / `PDO_BADGE` (`data/pdoMeta.ts`) | `capBadgeChip` |
+| e-Marker 各行 | `buildCableItems()` L.385 in `TopologyView.jsx` | PropTree（色テキスト） |
+| Mode (EPR/SPR) | `buildSourceItems()` L.136 in `TopologyView.jsx` | PropTree（色テキスト） |

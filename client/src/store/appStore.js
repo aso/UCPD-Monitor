@@ -21,6 +21,9 @@ export const INITIAL_TOPOLOGY = {
   ccPin:   null,
   prSwapPending: false,
   eprSrcCapsAccum: [],   // accumulated EPR_Source_Capabilities DOs across chunks
+  // 'SPY' = passive spy mode (TRACE_SRC/SNK 0x07/0x08),
+  // 'SNK' = DISCO itself is the sink device (TRACE_MESSAGE_IN/OUT 0x01/0x02)
+  discoMode: null,
 };
 
 /**
@@ -30,8 +33,8 @@ export const INITIAL_TOPOLOGY = {
 function applyFrameToTopo(topo, frame) {
   const { recordType, header, cpd, eventName, dataObjects, parsedPayload, vbusMv, ccPin, extendedHeader } = frame;
 
-  // ── EVENT records ──
-  if (recordType === 'EVENT') {
+  // ── CAD_EVENT records ──
+  if (recordType === 'CAD_EVENT') {
     if (eventName === 'DETACHED') {
       // Cable disconnected → full reset
       return { ...INITIAL_TOPOLOGY };
@@ -60,8 +63,16 @@ function applyFrameToTopo(topo, frame) {
   const isSOP    = sopQual === 'SOP';
   const isSOP1   = sopQual === "SOP'";
   const isSOP2   = sopQual === "SOP''";
-  const isSrcDir = cpd?.dirName === 'SRC\u2192SNK';
-  const isSnkDir = cpd?.dirName === 'SNK\u2192SRC';
+  // SPY mode:  0x07=TRACE_SRC (SRC port sent this),  0x08=TRACE_SNK (SNK port sent this)
+  // SNK mode:  0x01=TRACE_MESSAGE_IN (DISCO received from SRC), 0x02=TRACE_MESSAGE_OUT (DISCO sent to SRC)
+  const isSrcDir = cpd?.dir === 0x07 || cpd?.dir === 0x01;
+  const isSnkDir = cpd?.dir === 0x08 || cpd?.dir === 0x02;
+  // Detect and latch the DISCO operating mode from the first direction-bearing message
+  if ((cpd?.dir === 0x01 || cpd?.dir === 0x02) && topo.discoMode !== 'SNK') {
+    topo = { ...topo, discoMode: 'SNK' };
+  } else if ((cpd?.dir === 0x07 || cpd?.dir === 0x08) && topo.discoMode !== 'SPY') {
+    topo = { ...topo, discoMode: 'SPY' };
+  }
 
   // Hard Reset → reset PD state; keep cable-attach / VBUS readings
   if (typeName === 'Hard_Reset') {
@@ -177,7 +188,7 @@ function applyFrameToTopo(topo, frame) {
         const rawRdo  = dataObjects[0];
         const objPos  = (rawRdo >>> 28) & 0xF;
         const srcPdo  = next.source.capabilities[objPos - 1];
-        const srcType = srcPdo?.pdoType ?? (typeName === 'EPR_Request' ? 'APDO_AVS' : 'Fixed');
+        const srcType = srcPdo?.pdoType ?? (typeName === 'EPR_Request' ? 'APDO_EPR_AVS' : 'Fixed');
         const rdo = decodeRDO(rawRdo, srcType);
         // Sink sending a request → both sides present
         next.sink   = { ...next.sink,   connected: true, lastRequest: rdo };
@@ -334,6 +345,26 @@ export const useAppStore = create((set, get) => ({
   setImportStatus: (patch) =>
     set((state) => ({ importStatus: { ...state.importStatus, ...patch } })),
 
+  // --- Replay note: first NOTE: packet text found in an imported .cpd file ---
+  replayNote: null,
+  setReplayNote: (text) => set({ replayNote: text }),
+  clearReplayNote: ()   => set({ replayNote: null }),
+
+  // --- Memo history (persisted in localStorage, newest-first, max 20 entries) ---
+  memoHistory: (() => {
+    try { return JSON.parse(localStorage.getItem('ucpd_memo_history') ?? '[]'); } catch { return []; }
+  })(),
+  addMemoHistory: (text) => set((state) => {
+    const next = [text, ...state.memoHistory.filter((h) => h !== text)].slice(0, 20);
+    try { localStorage.setItem('ucpd_memo_history', JSON.stringify(next)); } catch { /* ignore */ }
+    return { memoHistory: next };
+  }),
+
+  // --- Timestamp anchor derived from ATTACHED event + auto-injected NOTE: ---
+  // { attachedTick: number (firmware ms-since-boot), wallMs: number (epoch ms) } | null
+  tsAnchor: null,
+  setTsAnchor: (anchor) => set({ tsAnchor: anchor }),
+
   // --- Topology state ---
   topology: { ...INITIAL_TOPOLOGY },
 
@@ -347,7 +378,7 @@ export const useAppStore = create((set, get) => ({
     for (const f of frames) {
       // File-replay semantics: DETACHED does NOT clear topology (user wants to see last state).
       // Only ATTACHED resets the device state (a new connection begins fresh).
-      if (f.recordType === 'EVENT' && f.eventName === 'DETACHED') continue;
+      if (f.recordType === 'CAD_EVENT' && f.eventName === 'DETACHED') continue;
       topo = applyFrameToTopo(topo, f);
     }
     set({ topology: topo });
@@ -363,5 +394,16 @@ export const useAppStore = create((set, get) => ({
       consoleLogs: [...state.consoleLogs.slice(-4999), `${new Date().toISOString()} ${line}`],
     })),
   clearLogs: () => set({ consoleLogs: [] }),
+
+  // --- Measurement stream (DISCO ADC, type 0x002C) ---
+  // Ring buffer of the last MAX_MEASURE_SAMPLES samples broadcast by the server.
+  measureSamples: [],
+  measureRunning: false,
+  addMeasureSample: (sample) =>
+    set((state) => ({
+      measureSamples: [...state.measureSamples.slice(-(200 - 1)), sample],
+    })),
+  setMeasureRunning: (running) => set({ measureRunning: running }),
+  clearMeasureSamples: () => set({ measureSamples: [] }),
 }));
 

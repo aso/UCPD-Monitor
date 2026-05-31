@@ -63,6 +63,31 @@
   letter-spacing: 0.5px;
 }
 
+/* Note indicator icon + subtitle shown next to the app title */
+.titleNoteIndicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: #ffcc80;
+  letter-spacing: 0.2px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-left: 2px solid #3a3020;
+  padding-left: 8px;
+  margin-left: 2px;
+  opacity: 0.85;
+  cursor: default;
+  user-select: none;
+  flex-shrink: 1;
+}
+.titleNoteIndicator:hover {
+  opacity: 1;
+}
+
 .pingBtn {
   background: none;
   border: 1px solid #555;
@@ -133,3 +158,129 @@
   height: 180px;
   flex-shrink: 0;
 }
+
+/* ---- Memo button in title bar ---- */
+.memoBtn {
+  background: none;
+  border: 1px solid #5a4a20;
+  color: #c8a040;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.memoBtn:hover {
+  background: #1e1608;
+  color: #ffcc80;
+  border-color: #c8a040;
+}
+
+/* ---- Memo dialog overlay ---- */
+.memoOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.memoDialog {
+  background: #1a1a28;
+  border: 1px solid #4a3a10;
+  border-radius: 6px;
+  padding: 20px 24px 16px;
+  min-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+}
+
+.memoTitle {
+  font-size: 13px;
+  font-weight: bold;
+  color: #ffcc80;
+  letter-spacing: 0.5px;
+}
+
+.memoInput {
+  background: #0e0e18;
+  border: 1px solid #3a3020;
+  border-radius: 3px;
+  color: #e0e0e0;
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+.memoInput:focus {
+  border-color: #c8a040;
+}
+
+/* History quick-pick list */
+.memoHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid #2a2010;
+  border-radius: 3px;
+  background: #0a0a12;
+  padding: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3020 transparent;
+}
+
+.memoHistoryItem {
+  background: none;
+  border: none;
+  color: #c8a878;
+  font-size: 11px;
+  text-align: left;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+.memoHistoryItem:hover {
+  background: #1e1608;
+  color: #ffcc80;
+}
+
+.memoActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memoCancel {
+  background: none;
+  border: 1px solid #444;
+  color: #888;
+  padding: 3px 14px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.memoCancel:hover { border-color: #888; color: #ccc; }
+
+.memoOk {
+  background: #2a1e04;
+  border: 1px solid #c8a040;
+  color: #ffcc80;
+  padding: 3px 14px;
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.memoOk:hover:not(:disabled) { background: #3a2c08; }
+.memoOk:disabled { opacity: 0.35; cursor: not-allowed; }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 AsO
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useCpdImport } from './hooks/useCpdImport';
 import { useAppStore }  from './store/appStore';
@@ -9,6 +9,7 @@ import TopologyView     from './components/TopologyView';
 import MessageTable     from './components/MessageTable';
 import Console          from './components/Console';
 import SerialBar        from './components/SerialBar';
+import MeasurePanel     from './components/MeasurePanel';
 import styles           from './App.module.css';
 
 function StatusBadge() {
@@ -48,13 +49,84 @@ function ImportBadge() {
   return null;
 }
 
+/**
+ * MemoDialog — inline modal for entering a one-line user memo.
+ * Submits via the sendMessage WebSocket call.
+ */
+function MemoDialog({ onClose, sendMessage }) {
+  const memoHistory  = useAppStore((s) => s.memoHistory);
+  const addMemoHistory = useAppStore((s) => s.addMemoHistory);
+  const [text, setText] = useState('');
+  const inputRef = useRef(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const handleSubmit = useCallback(() => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    addMemoHistory(trimmed);
+    sendMessage({ type: 'WRITE_USER_NOTE', text: trimmed });
+    onClose();
+  }, [text, sendMessage, onClose, addMemoHistory]);
+
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === 'Enter')  handleSubmit();
+    if (e.key === 'Escape') onClose();
+  }, [handleSubmit, onClose]);
+
+  return (
+    <div className={styles.memoOverlay} onClick={onClose}>
+      <div className={styles.memoDialog} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.memoTitle}>Add Memo</div>
+        <input
+          ref={inputRef}
+          className={styles.memoInput}
+          type="text"
+          maxLength={80}
+          list="memo-history-list"
+          placeholder="e.g. Apple 61W + Google Pixel 7 @ 9V"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+        {memoHistory.length > 0 && (
+          <datalist id="memo-history-list">
+            {memoHistory.map((h, i) => <option key={i} value={h} />)}
+          </datalist>
+        )}
+        {memoHistory.length > 0 && (
+          <div className={styles.memoHistoryList}>
+            {memoHistory.map((h, i) => (
+              <button
+                key={i}
+                className={styles.memoHistoryItem}
+                onClick={() => { setText(h); inputRef.current?.focus(); }}
+                title={h}
+              >
+                {h}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className={styles.memoActions}>
+          <button className={styles.memoCancel} onClick={onClose}>Cancel</button>
+          <button className={styles.memoOk} onClick={handleSubmit} disabled={!text.trim()}>OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { sendPing, sendMessage }       = useWebSocket();
   const { openLogsFilePicker, openImportFilePicker, importFiles } = useCpdImport();
   const serialConnected                 = useSerialConnected();
+  const replayNote                      = useAppStore((s) => s.replayNote);
   const [dragging, setDragging]     = useState(false);
   const [showTopology, setShowTopology] = useState(true);
   const [showConsole,  setShowConsole]  = useState(false);
+  const [showMemo,     setShowMemo]     = useState(false);
+  const [showMeasure,  setShowMeasure]  = useState(false);
 
   const onDragOver = useCallback((e) => {
     e.preventDefault();
@@ -98,6 +170,11 @@ export default function App() {
         <span className={styles.title}>
           UCPD-Monitor
           <span className={styles.titleVersion}>v{import.meta.env.VITE_APP_VERSION}</span>
+          {replayNote && (
+            <span className={styles.titleNoteIndicator} title={replayNote} aria-label={replayNote}>
+              &#x1F4DD; {replayNote}
+            </span>
+          )}
         </span>
         <StatusBadge />
         <ImportBadge />
@@ -115,6 +192,11 @@ export default function App() {
         >.cpd Import</button>
         <button onClick={sendPing} className={styles.pingBtn} style={{ display: 'none' }}>Ping</button>
         <button
+          className={styles.memoBtn}
+          onClick={() => setShowMemo(true)}
+          title="Add a one-line memo to the current .cpd log"
+        >📝 Memo</button>
+        <button
           className={`${styles.panelToggleBtn} ${showTopology ? styles.panelToggleActive : ''}`}
           onClick={() => setShowTopology((v) => !v)}
           title="Toggle Connection View panel"
@@ -124,8 +206,16 @@ export default function App() {
           onClick={() => setShowConsole((v) => !v)}
           title="Toggle Console panel"
         >Console</button>
+        <button
+          className={`${styles.panelToggleBtn} ${showMeasure ? styles.panelToggleActive : ''}`}
+          onClick={() => setShowMeasure((v) => !v)}
+          title="Toggle ADC Measurement Stream panel"
+        >ADC Stream</button>
         <SerialBar sendMessage={sendMessage} />
       </header>
+
+      {/* Memo dialog */}
+      {showMemo && <MemoDialog onClose={() => setShowMemo(false)} sendMessage={sendMessage} />}
 
       {/* Connection View strip */}
       {showTopology && <TopologyView />}
@@ -141,6 +231,9 @@ export default function App() {
           <Console />
         </div>
       )}
+
+      {/* ADC Measurement Stream panel */}
+      {showMeasure && <MeasurePanel sendMessage={sendMessage} />}
     </div>
   );
 }

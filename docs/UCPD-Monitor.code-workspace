@@ -5,6 +5,56 @@
 		}
 	],
 	"settings": {
-		"chat.agent.maxRequests": 99
+		"chat.agent.maxRequests": 99,
+		"chat.tools.terminal.autoApprove": {
+			"/^Get-ChildItem -Path \"D:\\\\My\\\\source\\\\GitHub\\\\STM32CubeG0\\\\Projects\\\\STM32G071B-DISCO\\\\Demonstrations\\\\USBPD_AnalyzerVSC\\\\USBPD_Analyzer\" -Recurse -Include \"\\*\\.h\" \\| Where-Object \\{ \\(Get-Content \\$_\\.FullName -Raw\\) -match \"TRACE_EVENT\" \\} \\| ForEach-Object \\{ \\$_\\.FullName \\}$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^Get-ChildItem -Path \"D:\\\\My\\\\source\\\\GitHub\\\\STM32CubeG0\\\\Projects\\\\STM32G071B-DISCO\\\\Demonstrations\\\\USBPD_AnalyzerVSC\\\\USBPD_Analyzer\" -Recurse -Include \"\\*\\.h\",\"\\*\\.c\" \\| Where-Object \\{ \\$_\\.Name -match \"tracer\" \\} \\| ForEach-Object \\{ \\$_\\.FullName \\}$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^Get-ChildItem -Path \"D:\\\\My\\\\source\\\\GitHub\\\\STM32CubeG0\\\\Projects\\\\STM32G071B-DISCO\\\\Demonstrations\\\\USBPD_AnalyzerVSC\\\\USBPD_Analyzer\\\\Middlewares\\\\ST\\\\STM32_USBPD_Library\\\\Core\\\\src\" \\| ForEach-Object \\{ \\$_\\.FullName \\}$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^Get-ChildItem -Path \"D:\\\\My\\\\source\\\\GitHub\\\\STM32CubeG0\\\\Projects\\\\STM32G071B-DISCO\\\\Demonstrations\\\\USBPD_AnalyzerVSC\\\\USBPD_Analyzer\\\\Middlewares\\\\ST\\\\STM32_USBPD_Library\\\\Core\\\\lib\" \\| ForEach-Object \\{ \\$_\\.Name \\}$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd \"D:\\\\My\\\\source\\\\STMicro\\\\STM32CubeMonitor-UCPD-Web\\\\client\" ; npx tsc --noEmit 2>&1 \\| Select-String \"pd_parser\" \\| Select-Object -First 20$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npx tsc": true,
+			"ForEach-Object": true,
+			"2415..2445": true,
+			"npx vitest": true,
+			"/^cd \"D:\\\\My\\\\source\\\\STMicro\\\\STM32CubeMonitor-UCPD-Web\" ; node -e \"\nconst fs = require\\('fs'\\);\n// 大きめのファイルでtraceEvent分布を見る\nconst files = \\['logs/session_2026-04-22T03-53-13\\.cpd', 'logs/session_2026-04-22T04-45-28\\.cpd'\\];\nfor \\(const f of files\\) \\{\n  const buf = fs\\.readFileSync\\(f\\);\n  const dist = \\{\\};\n  let off = 0;\n  let frames = 0;\n  while \\(off < buf\\.length - 20\\) \\{\n    const i = buf\\.indexOf\\(Buffer\\.from\\(\\[0xFD,0xFD,0xFD,0xFD\\]\\), off\\);\n    if \\(i < 0\\) break;\n    const tag = buf\\[i\\+4\\];\n    if \\(tag !== 0x32 && tag !== 0x52\\) \\{ off = i\\+1; continue; \\}\n    const traceEvt = buf\\[i\\+7\\];\n    dist\\[traceEvt\\] = \\(dist\\[traceEvt\\] \\|\\| 0\\) \\+ 1;\n    frames\\+\\+;\n    const lenHi = buf\\[i\\+5\\], lenLo = buf\\[i\\+6\\];\n    const lenVal = \\(lenHi << 8\\) \\| lenLo;\n    const payLen = lenVal - 9;\n    off = i \\+ 20 \\+ Math\\.max\\(0, payLen\\);\n  \\}\n  const named = \\{\\};\n  const NAMES = \\{0:'FORMAT_TLV',1:'MSG_IN',2:'MSG_OUT',3:'CAD_EVENT',4:'PE_STATE',5:'CAD_LOW',6:'DEBUG',7:'SRC',8:'SNK',9:'NOTIF',10:'POWER',11:'TCPM',12:'PRL_STATE',13:'PRL_EVENT',14:'PHY_NOTFRWD',15:'CPU',16:'TIMEOUT',18:'UCSI'\\};\n  for \\(const \\[k,v\\] of Object\\.entries\\(dist\\)\\) named\\[NAMES\\[k\\] \\?\\? '0x'\\+Number\\(k\\)\\.toString\\(16\\)\\] = v;\n  console\\.log\\(f\\.split\\('/'\\)\\.pop\\(\\), 'frames:', frames, JSON\\.stringify\\(named\\)\\);\n\\}\n\"\n$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^cd \"D:\\\\My\\\\source\\\\STMicro\\\\STM32CubeMonitor-UCPD-Web\" ; node -e \"\nconst fs = require\\('fs'\\);\nconst buf = fs\\.readFileSync\\('logs/session_2026-04-22T03-53-13\\.cpd'\\);\nconst NAMES = \\{0:'FORMAT_TLV',1:'MSG_IN',2:'MSG_OUT',3:'CAD_EVENT',4:'PE_STATE',5:'CAD_LOW',6:'DEBUG',7:'SRC',8:'SNK',9:'NOTIF',10:'POWER',11:'TCPM',12:'PRL_STATE',13:'PRL_EVENT',14:'PHY_NOTFRWD',15:'CPU',16:'TIMEOUT',18:'UCSI'\\};\nlet off = 0;\nlet shown = 0;\nwhile \\(off < buf\\.length - 20 && shown < 10\\) \\{\n  const i = buf\\.indexOf\\(Buffer\\.from\\(\\[0xFD,0xFD,0xFD,0xFD\\]\\), off\\);\n  if \\(i < 0\\) break;\n  const tag = buf\\[i\\+4\\];\n  if \\(tag !== 0x32 && tag !== 0x52\\) \\{ off = i\\+1; continue; \\}\n  const traceEvt = buf\\[i\\+7\\];\n  const ts = buf\\.readUInt32LE\\(i\\+8\\);\n  const port = buf\\[i\\+12\\];\n  const sop = buf\\[i\\+13\\];\n  const payLen = \\(\\(buf\\[i\\+5\\]<<8\\)\\|buf\\[i\\+6\\]\\) - 9;\n  const payload = buf\\.slice\\(i\\+16, i\\+16\\+payLen\\);\n  const evtName = NAMES\\[traceEvt\\] \\?\\? '0x'\\+traceEvt\\.toString\\(16\\);\n  if \\(traceEvt === 3 \\|\\| traceEvt === 6\\) \\{\n    const sopEvt = \\{0:'NONE',1:'DETACHED',2:'ATTACHED',3:'EMC',4:'ATTEMC',5:'ACCESSORY',6:'DEBUG',8:'VPD',9:'UNKNOWN',10:'CABLE_ATTACHED',11:'CABLE_DETACHED'\\};\n    const extra = traceEvt===6 \\? Buffer\\.from\\(payload\\)\\.toString\\('ascii'\\) : \\(sopEvt\\[sop\\]\\?\\?'0x'\\+sop\\.toString\\(16\\)\\);\n    console\\.log\\('ts='\\+ts, 'port='\\+port, evtName, extra\\);\n    shown\\+\\+;\n  \\}\n  off = i \\+ 20 \\+ Math\\.max\\(0, payLen\\);\n\\}\n// Also show a few SRC/SNK\noff = 0; shown = 0;\nwhile \\(off < buf\\.length - 20 && shown < 3\\) \\{\n  const i = buf\\.indexOf\\(Buffer\\.from\\(\\[0xFD,0xFD,0xFD,0xFD\\]\\), off\\);\n  if \\(i < 0\\) break;\n  const tag = buf\\[i\\+4\\];\n  if \\(tag !== 0x32 && tag !== 0x52\\) \\{ off = i\\+1; continue; \\}\n  const traceEvt = buf\\[i\\+7\\];\n  const ts = buf\\.readUInt32LE\\(i\\+8\\);\n  const sop = buf\\[i\\+13\\];\n  const payLen = \\(\\(buf\\[i\\+5\\]<<8\\)\\|buf\\[i\\+6\\]\\) - 9;\n  if \\(traceEvt === 7 \\|\\| traceEvt === 8\\) \\{\n    const payload = buf\\.slice\\(i\\+16, i\\+16\\+Math\\.min\\(payLen,4\\)\\);\n    const hdr = \\(payload\\[0\\]\\|\\(payload\\[1\\]<<8\\)\\);\n    console\\.log\\('ts='\\+ts, NAMES\\[traceEvt\\], 'sop='\\+sop, 'hdrWord=0x'\\+hdr\\.toString\\(16\\)\\.padStart\\(4,'0'\\), 'payLen='\\+payLen\\);\n    shown\\+\\+;\n  \\}\n  off = i \\+ 20 \\+ Math\\.max\\(0, payLen\\);\n\\}\n\"\n$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"npm run dev": true,
+			"npm run electron:dev": true,
+			"2317..2400": true,
+			"Tee-Object": true,
+			"/^powershell -Command \"Get-Process -Id 48980 \\| Select-Object ProcessName,Id,Path\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^powershell -Command \"Get-Process -Id 48980 \\| Get-ProcessMitigation\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			},
+			"/^powershell -Command \"Get-Process -Id 48980 \\| Get-ProcessMainWindow\"$/": {
+				"approve": true,
+				"matchCommandLine": true
+			}
+		}
 	}
 }

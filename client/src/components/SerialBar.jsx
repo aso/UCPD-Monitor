@@ -4,30 +4,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './SerialBar.module.css';
 import appStyles from '../App.module.css';
+import { KNOWN_DEVICES, knownLabel } from '../data/knownDevices'; // eslint-disable-line no-unused-vars
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]; // eslint-disable-line no-unused-vars
 // Note: baud rate is meaningless for USB-CDC devices; kept only for non-CDC fallback.
 // The firmware uses the CDC SET_LINE_CODING baud rate as a magic number to switch
 // into CPD streaming mode.  921600 triggers the stream; other values do not.
 const USB_CDC_BAUD = 921600;
-
-/**
- * Known USB devices: key = "VID:PID" (uppercase), value = friendly label.
- * Used for auto-selection priority and display badge.
- */
-const KNOWN_DEVICES = {
-  '0483:374B': 'STM32G071B-DISCO (STLINK-V3)',
-  '0483:374E': 'STLINK-V3E',
-  '0483:374F': 'STLINK-V3MODS',
-  '0483:3748': 'STLINK-V2-1',
-};
-
-/** Return the friendly label for a port entry, or null. */
-function knownLabel(port) {
-  const vid = (port.vendorId  ?? '').toUpperCase();
-  const pid = (port.productId ?? '').toUpperCase();
-  return KNOWN_DEVICES[`${vid}:${pid}`] ?? null;
-}
 
 /**
  * SerialBar — toolbar widget for serial port selection and connection.

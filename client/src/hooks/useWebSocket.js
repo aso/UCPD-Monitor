@@ -5,6 +5,39 @@ import { useAppStore } from '../store/appStore';
 import { parseRawFrame, parseCpdFile, isUndecodedMessage, buildUnknownRecord } from '../parsers/pd_parser';
 
 const SERVER_PORT = import.meta.env.VITE_SERVER_PORT ?? '3001';
+
+// Pattern for the auto-injected ATTACHED timestamp: "YYYY-MM-DD HH:MM:SS"
+const TS_ANCHOR_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/** Parse "YYYY-MM-DD HH:MM:SS" as local time → epoch ms */
+function parseLocalTimeStr(s) {
+  const [date, time] = s.split(' ');
+  const [y, mo, d]  = date.split('-').map(Number);
+  const [h, m, sec] = time.split(':').map(Number);
+  return new Date(y, mo - 1, d, h, m, sec).getTime();
+}
+
+/**
+ * Scan a frame array for the last ATTACHED event + its immediately following
+ * auto-injected timestamp NOTE: packet, and return an anchor object or null.
+ */
+function findTsAnchor(frames) {
+  let pendingAttachedTick = null;
+  let anchor = null;
+  for (const f of frames) {
+    if (f.recordType === 'CAD_EVENT' && f.eventName === 'ATTACHED') {
+      pendingAttachedTick = f.ts;
+    } else if (pendingAttachedTick !== null && f.recordType === 'ASCII_LOG' && typeof f.asciiLog === 'string') {
+      const noteText = f.asciiLog.startsWith('NOTE:') ? f.asciiLog.slice(5) : null;
+      if (noteText && TS_ANCHOR_PATTERN.test(noteText)) {
+        const wallMs = parseLocalTimeStr(noteText);
+        if (!isNaN(wallMs)) anchor = { attachedTick: pendingAttachedTick, wallMs };
+      }
+      pendingAttachedTick = null; // consumed (matched or not)
+    }
+  }
+  return anchor;
+}
 const WS_URL  = `ws://${window.location.hostname}:${SERVER_PORT}`;
 const LOG_URL = `http://${window.location.hostname}:${SERVER_PORT}/api/log-unknown`;
 const RECONNECT_DELAY_MS = 3000;
@@ -26,7 +59,11 @@ function logUnknownRecords(records) {
 export function useWebSocket() {
   const wsRef = useRef(null);
   const reconnectTimer = useRef(null);
-  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames, setImportStatus } = useAppStore();
+  const { setWsStatus, setSerialStatus, setSerialPorts, hexDump, addMessage, appendLog, applyFrame, clearMessages, setMessages, replayFrames, setImportStatus, setReplayNote, clearReplayNote, setTsAnchor, addMeasureSample, setMeasureRunning } = useAppStore();
+  // Tracks the firmware tick of the most recent ATTACHED event seen in live stream
+  const pendingAttachedTickRef = useRef(null);
+  // tPSSourceOn timer: Accept seen from SRC — expect PS_RDY within 480 ms (§8.3.3.2.5)
+  const acceptTimerRef = useRef(null);
 
   const handleMessage = useCallback(
     (evt) => {
@@ -50,23 +87,34 @@ export function useWebSocket() {
           if (filename) {
             // File import: flush any live messages before loading imported data
             clearMessages();
+            clearReplayNote();
             setImportStatus({ filename });
           }
           appendLog(`[WS] Replaying ${records.length} record(s) from server history…`);
           const allFrames = [];
           const unknowns  = [];
+          let firstNote   = null;
           for (const rec of records) {
             try {
               const bytes = Uint8Array.from(rec.hex.split(' ').map((b) => parseInt(b, 16)));
               const { frames } = parseCpdFile(bytes.buffer);
               for (const frame of frames) {
                 allFrames.push(frame);
+                if (frame.recordType === 'ASCII_LOG' && typeof frame.asciiLog === 'string' && frame.asciiLog.startsWith('NOTE:')) {
+                  const noteText = frame.asciiLog.slice(5);
+                  // Only inherit user-authored memos (not auto-injected timestamps)
+                  if (!TS_ANCHOR_PATTERN.test(noteText) && firstNote === null) {
+                    firstNote = noteText;
+                  }
+                }
                 if (isUndecodedMessage(frame.header)) {
                   unknowns.push(buildUnknownRecord(frame, 'serial'));
                 }
               }
             } catch { /* skip malformed record */ }
           }
+          if (firstNote !== null) setReplayNote(firstNote);
+          setTsAnchor(findTsAnchor(allFrames));
           setMessages(allFrames);
           replayFrames(allFrames);
           if (unknowns.length) logUnknownRecords(unknowns);
@@ -109,6 +157,46 @@ export function useWebSocket() {
             for (const frame of frames) {
               addMessage(frame);
               applyFrame(frame);
+              // ── Accept→PS_RDY timeout (tPSSourceOn = 480 ms, §8.3.3.2.5) ──────────
+              // Only for live SOP Accept from Source; clear on PS_RDY / Reject / reset.
+              {
+                const tn  = frame.header?.typeName;
+                const dir = frame.cpd?.dir;  // 0x07=SRC→SNK, 0x08=SNK→SRC
+                const sop = frame.cpd?.sopQualName;
+                // dir 0x07=TRACE_SRC(SPY) | 0x01=MSG_IN(SNK mode) → message from SRC
+                if (tn === 'Accept' && (dir === 0x07 || dir === 0x01) && sop === 'SOP') {
+                  if (acceptTimerRef.current) clearTimeout(acceptTimerRef.current);
+                  acceptTimerRef.current = setTimeout(() => {
+                    acceptTimerRef.current = null;
+                    appendLog('[WARN] tPSSourceOn: PS_RDY not received within 480 ms after Accept — §8.3.3.2.5 violation');
+                  }, 480);
+                } else if (
+                  (tn === 'PS_RDY' && (dir === 0x07 || dir === 0x01)) ||
+                  tn === 'Reject' || tn === 'Wait' || tn === 'Hard_Reset' ||
+                  (frame.recordType === 'CAD_EVENT' && frame.eventName === 'DETACHED')
+                ) {
+                  if (acceptTimerRef.current) {
+                    clearTimeout(acceptTimerRef.current);
+                    acceptTimerRef.current = null;
+                  }
+                }
+              }
+              // ─────────────────────────────────────────────────────────────────────────
+              if (frame.recordType === 'CAD_EVENT' && frame.eventName === 'ATTACHED') {
+                pendingAttachedTickRef.current = frame.ts;
+              }
+              if (frame.recordType === 'ASCII_LOG' && typeof frame.asciiLog === 'string' && frame.asciiLog.startsWith('NOTE:')) {
+                const noteText = frame.asciiLog.slice(5);
+                if (pendingAttachedTickRef.current !== null && TS_ANCHOR_PATTERN.test(noteText)) {
+                  // Auto-injected timestamp: update tsAnchor only, do NOT overwrite user memo
+                  const wallMs = parseLocalTimeStr(noteText);
+                  if (!isNaN(wallMs)) setTsAnchor({ attachedTick: pendingAttachedTickRef.current, wallMs });
+                } else if (!TS_ANCHOR_PATTERN.test(noteText)) {
+                  // User-authored memo: update replayNote
+                  setReplayNote(noteText);
+                }
+                pendingAttachedTickRef.current = null;
+              }
               if (frame.parseViolations?.length) {
                 const id = frame.header?.typeName ?? 'frame';
                 for (const v of frame.parseViolations) {
@@ -142,11 +230,26 @@ export function useWebSocket() {
           setSerialPorts(Array.isArray(payload.ports) ? payload.ports : []);
           break;
 
+        case 'MEASURE_SAMPLE':
+          addMeasureSample({
+            ts:           payload.ts,
+            outerTag:     payload.outerTag,
+            raw:          payload.raw,
+            firmwareTick: payload.firmwareTick ?? null,
+            vbusMv:       payload.vbusMv       ?? null,
+            ibusMa:       payload.ibusMa       ?? null,
+          });
+          break;
+
+        case 'MEASURE_RUNNING':
+          setMeasureRunning(!!payload.running);
+          break;
+
         default:
           appendLog(`[WS] Unknown type: ${payload.type}`);
       }
     },
-    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump, clearMessages, setMessages, replayFrames]
+    [addMessage, appendLog, applyFrame, setSerialStatus, setSerialPorts, hexDump, clearMessages, setMessages, replayFrames, setTsAnchor, setReplayNote, clearReplayNote, addMeasureSample, setMeasureRunning]
   );
 
   const connect = useCallback(() => {
@@ -183,6 +286,7 @@ export function useWebSocket() {
     connect();
     return () => {
       clearTimeout(reconnectTimer.current);
+      if (acceptTimerRef.current) clearTimeout(acceptTimerRef.current);
       wsRef.current?.close();
     };
   }, [connect]);

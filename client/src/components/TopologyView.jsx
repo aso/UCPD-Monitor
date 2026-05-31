@@ -3,6 +3,8 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
 import { useAppStore } from '../store/appStore';
 import styles from './TopologyView.module.css';
+import { PDO_COLOR, PDO_BADGE, PDO_TYPE_META } from '../data/pdoMeta';
+import { knownLabel } from '../data/knownDevices';
 
 // ── USB VID → Manufacturer lookup ────────────────────────────────
 // Sources: USB-IF VID list (usbids.github.io), known USB PD vendors
@@ -73,14 +75,7 @@ function extractVidHex(s) {
   const m = s?.match(/^(0x[0-9a-fA-F]+)/i);
   return m ? m[1].toUpperCase() : (s ?? '').toUpperCase();
 }
-const PDO_COLORS = {
-  'Fixed':    '#80deea',
-  'Battery':  '#ffcc80',
-  'Variable': '#b39ddb',
-  'APDO_PPS': '#a5d6a7',
-  'APDO_AVS':     '#f48fb1',
-  'APDO_SPR_AVS': '#ce93d8',
-};
+
 
 function pdoLabel(pdo) {
   if (!pdo) return '—';
@@ -91,7 +86,7 @@ function pdoLabel(pdo) {
     case 'Battery':  return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.wMax/1000).toFixed(0)}W`;
     case 'Variable': return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.iMa/1000).toFixed(2)}A`;
     case 'APDO_PPS': return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${(pdo.iMa/1000).toFixed(2)}A`;
-    case 'APDO_AVS':     return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${pdo.pdpW}W`;
+    case 'APDO_EPR_AVS':     return `${pdo.vMinMv/1000}–${pdo.vMaxMv/1000}V / ${pdo.pdpW}W`;
     case 'APDO_SPR_AVS': {
       const sfx = pdo.iMa_15_20 > 0
         ? `${(pdo.iMa_9_15/1000).toFixed(2)}A (9–15V) / ${(pdo.iMa_15_20/1000).toFixed(2)}A (15–20V)`
@@ -104,10 +99,7 @@ function pdoLabel(pdo) {
 
 function pdoBadge(pdo) {
   if (!pdo) return '';
-  return pdo.pdoType === 'APDO_PPS' ? 'PPS'
-    : pdo.pdoType === 'APDO_AVS' ? 'AVS'
-    : pdo.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
-    : pdo.pdoType;
+  return PDO_BADGE[pdo.pdoType] ?? pdo.pdoType;
 }
 
 // Compact one-line capability range (used in node cap list)
@@ -122,7 +114,7 @@ function pdoRangeStr(pdo) {
       return `${(pdo.vMinMv / 1000).toFixed(1)}–${(pdo.vMaxMv / 1000).toFixed(1)}V  ${(pdo.iMa / 1000).toFixed(2)}A`;
     case 'APDO_PPS':
       return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V  ${(pdo.iMa / 1000).toFixed(2)}A`;
-    case 'APDO_AVS':
+    case 'APDO_EPR_AVS':
       return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V  ${pdo.pdpW}W`;
     case 'APDO_SPR_AVS':
       return `${(pdo.vMinMv / 1000).toFixed(2)}–${(pdo.vMaxMv / 1000).toFixed(2)}V`;
@@ -164,7 +156,7 @@ function buildSourceItems(source) {
       children: source.capabilities.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
-        color: PDO_COLORS[pdo.pdoType],
+        color: PDO_COLOR[pdo.pdoType],
       })),
     });
   }
@@ -177,7 +169,7 @@ function buildSourceItems(source) {
       children: source.snkCaps.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
-        color: PDO_COLORS[pdo.pdoType],
+        color: PDO_COLOR[pdo.pdoType],
       })),
     });
   }
@@ -199,8 +191,8 @@ function buildSourceItems(source) {
       color: source.eprActive ? '#ffb74d' : '#4caf50',
       autoExpand: true,
       children: [
-        { key: 'PDO Type',    value: pdo ? pdoBadge(pdo) : '—', color: PDO_COLORS[pdo?.pdoType] },
-        { key: 'PDO',         value: pdoLabel(pdo), color: PDO_COLORS[pdo?.pdoType] },
+        { key: 'PDO Type',    value: pdo ? pdoBadge(pdo) : '—', color: PDO_COLOR[pdo?.pdoType] },
+        { key: 'PDO',         value: pdoLabel(pdo), color: PDO_COLOR[pdo?.pdoType] },
         ...(isAdjustable
           ? [
               { key: 'PDO Range',    value: contractVoltStr(pdo) },
@@ -290,7 +282,7 @@ function buildSinkItems(sink) {
       children: sink.capabilities.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
-        color: PDO_COLORS[pdo.pdoType],
+        color: PDO_COLOR[pdo.pdoType],
       })),
     });
   }
@@ -303,7 +295,7 @@ function buildSinkItems(sink) {
       children: sink.srcCaps.map((pdo) => ({
         key: `#${pdo.index} ${pdoBadge(pdo)}`,
         value: pdoLabel(pdo),
-        color: PDO_COLORS[pdo.pdoType],
+        color: PDO_COLOR[pdo.pdoType],
       })),
     });
   }
@@ -537,7 +529,7 @@ function pdoToGrid(pdo) {
       return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa,            pMax: _                                     };
     case 'APDO_PPS':
       return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa,            pMax: _                                     };
-    case 'APDO_AVS':
+    case 'APDO_EPR_AVS':
       return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: _,                  pMax: pdo.pdpW != null ? pdo.pdpW * 1000 : _ };
     case 'APDO_SPR_AVS':
       return { vMax: pdo.vMaxMv, vMin: pdo.vMinMv, iMax: pdo.iMa_9_15 ?? _, pMax: _                                     };
@@ -561,7 +553,7 @@ function CapList({ caps, selectedObjPos, rdo, isSink = false }) {
       {caps.map((pdo) => {
         const sel = pdo.index === selectedObjPos;
         const grid = pdoToGrid(pdo);
-        const color = PDO_COLORS[pdo.pdoType];
+        const color = PDO_COLOR[pdo.pdoType];
         return (
           <div
             key={pdo.index}
@@ -608,19 +600,10 @@ function CapList({ caps, selectedObjPos, rdo, isSink = false }) {
   );
 }
 
-const PDO_TYPE_DEFS = [
-  { key: 'Fixed',        label: 'FIX',   color: '#80deea' },
-  { key: 'Battery',      label: 'BAT',   color: '#ffcc80' },
-  { key: 'Variable',     label: 'VAR',   color: '#b39ddb' },
-  { key: 'APDO_PPS',     label: 'PPS',   color: '#a5d6a7' },
-  { key: 'APDO_AVS',     label: 'AVS',   color: '#f48fb1' },
-  { key: 'APDO_SPR_AVS', label: 'S-AVS', color: '#ce93d8' },
-];
-
 function PdoTypeLamps({ pdoType }) {
   return (
     <div className={styles.pdoLamps}>
-      {PDO_TYPE_DEFS.map(({ key, label, color }) => {
+      {PDO_TYPE_META.filter(m => m.lamp != null).map(({ key, lamp, color }) => {
         const active = pdoType === key;
         return (
           <span
@@ -628,7 +611,7 @@ function PdoTypeLamps({ pdoType }) {
             className={`${styles.pdoLamp} ${active ? styles.pdoLampActive : ''}`}
             style={active ? { color, borderColor: color, textShadow: `0 0 6px ${color}88` } : undefined}
           >
-            {label}
+            {lamp}
           </span>
         );
       })}
@@ -994,7 +977,22 @@ function ContractBox({ contract, state }) {
 // ── Main export ───────────────────────────────────────────────────
 
 export default function TopologyView() {
-  const { source, eMarker, sink, cable } = useAppStore((s) => s.topology);
+  const { source, eMarker, sink, cable, discoMode } = useAppStore((s) => s.topology);
+  const serialStatus = useAppStore((s) => s.serialStatus);
+  const serialPorts  = useAppStore((s) => s.serialPorts);
+
+  // Derive the DISCO device label from the connected serial port
+  const discoLabel = useMemo(() => {
+    if (discoMode !== 'SNK') return 'DISCO';
+    const connectedPort = serialPorts.find((p) => p.path === serialStatus.port);
+    if (!connectedPort) return 'DISCO';
+    const friendly = knownLabel(connectedPort);
+    if (friendly) {
+      // Use the part before the first ' (' for brevity, e.g. "STM32G071B-DISCO"
+      return friendly.split(' (')[0];
+    }
+    return connectedPort.manufacturer ?? 'DISCO';
+  }, [discoMode, serialPorts, serialStatus.port]);
   const messages     = useAppStore((s) => s.messages);
   const replayFrames = useAppStore((s) => s.replayFrames);
 
@@ -1086,7 +1084,7 @@ export default function TopologyView() {
           <div className={styles.chain}>
             <NodeBox label="SOURCE" badge={DFP_TYPE_LABELS[source.discId?.dfpPType] || null} capList={srcCapList} sub={srcSub} mode={source.eprActive ? 'epr' : source.contract ? 'spr' : null} state={srcState} />
             <CableWithEMarker state={contractState} sop1={eMarker.sop1} sop2={eMarker.sop2} contract={source.contract} />
-            <NodeBox label="SINK" badge={UFP_TYPE_LABELS[sink.discId?.ufpPType] || null} capList={snkCapList} sub={snkSub} mode={sink.eprActive ? 'epr' : sink.lastRequest ? 'spr' : null} state={snkState} narrow={snkNarrow} />
+            <NodeBox label={discoMode === 'SNK' ? discoLabel : 'SINK'} badge={UFP_TYPE_LABELS[sink.discId?.ufpPType] || null} capList={snkCapList} sub={snkSub} mode={sink.eprActive ? 'epr' : sink.lastRequest ? 'spr' : null} state={snkState} narrow={snkNarrow} />
           </div>
         </div>
 

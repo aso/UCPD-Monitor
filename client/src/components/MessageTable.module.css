@@ -170,6 +170,12 @@
 .rowDebug { opacity: 0.7; background: #1a1230 !important; }
 .rowEvent { background: #1a1a00 !important; }
 
+/* Reject / Wait message highlighting (SPT items 4 / 5) */
+.rowReject { background: rgba(239, 83, 80, 0.13) !important; }
+.rowReject:hover { background: rgba(239, 83, 80, 0.22) !important; }
+.rowWait   { background: rgba(255, 152, 0, 0.13) !important; }
+.rowWait:hover   { background: rgba(255, 152, 0, 0.22) !important; }
+
 /* ── Tree expand ───────────────────────────────────────────── */
 .rowExpandable { cursor: pointer; }
 .rowExpandable:hover { background: #253040 !important; }

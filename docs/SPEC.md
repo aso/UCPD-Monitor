@@ -1,7 +1,7 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 1.8  
-更新日: 2026-04-19
+バージョン: 3.2.5  
+更新日: 2026-05-31
 
 ---
 
@@ -14,7 +14,7 @@
 | 機能 | 説明 |
 |---|---|
 | ライブシリアル監視 | STM32 UCPD デバイスを USB シリアル経由で接続してリアルタイムモニタリング |
-| .cpd ファイルインポート | STM32CubeMonitor-UCPD が保存した `.cpd` バイナリファイルの再生。インポート前に Live ログを自動フラッシュ。セッションファイルへの重複書き込みなし |
+| .cpd ファイルインポート | `.cpd Open` ボタン（logs フォルダ基準）と `.cpd Import` ボタン（前回フォルダ基準）の 2 ボタンで `.cpd` ファイルを再生。インポート前に Live ログを自動フラッシュ。セッションファイルへの重複書き込みなし |
 | USB PD メッセージ解析 | USB PD Rev 3.2 準拠のフルデコード (SPR/EPR/PPS/AVS/SPR-AVS) |
 | Connection View | Source / Cable (eMarker) / Sink の接続状態と契約情報を可視化。Source PDO は I.max/P.max、Sink PDO は I.op/P.op を表示 |
 | メッセージテーブル | 時系列メッセージリスト。仮想スクロール対応 (1000行超でも高速)。列幅ユーザリサイズ可。ツリー展開・ウィンドウリサイズで最終列が安定して右端まで表示 |
@@ -24,6 +24,8 @@
 | 行選択・クリップボードコピー | クリック/Shift+クリック範囲選択。Ctrl+C または右クリックで TSV コピー |
 | セッション保存 | ライブデータを自動的にタイムスタンプ付き `.cpd` ファイルへ保存。アプリ終了時にシリアルポート自動切断・ファイルフラッシュ |
 | 不明パケットログ | パース不能フレームを `logs/unknown_packets.yaml` へ記録 |
+| メモ注記 | ライブセッション中にワンライン・メモを `.cpd` ログに書き込む。再生時にタイトルバーに自動表示 |
+| ADC 計測ストリーム | DISCO ボードからの周期的 VBUS/IBUS サンプルをリアルタイム表示。MEASURE_START/STOP コマンドで制御 |
 
 ---
 
@@ -38,20 +40,20 @@
 │  │   ├── TopologyView.jsx   (接続・契約可視化)          │   │
 │  │   ├── MessageTable.jsx   (メッセージ一覧)            │   │
 │  │   ├── Console.jsx        (ASCII ログ)                │   │
+│  │   ├── MeasurePanel.jsx   (ADC 計測ストリーム)         │   │
 │  │   └── SerialBar.jsx      (接続操作)                  │   │
 │  │                                                     │   │
 │  │   Zustand Store (appStore.js)                       │   │
 │  │   Hooks: useWebSocket.js / useCpdImport.js          │   │
-│  │   Parser: pd_parser.js (Rev 3.2 PD デコーダ)        │   │
+│  │   Parser: pd_parser.ts (Rev 3.2 PD デコーダ)          │   │
 │  └──────────────────┬──────────────────────────────────┘   │
 │                     │ WebSocket (ws://)                     │
 │  ┌──────────────────▼──────────────────────────────────┐   │
 │  │            Express サーバ (server/index.js)          │   │
 │  │   SerialPort → CpdStreamParser → frame イベント     │   │
 │  │   POST /api/import-cpd  (ファイルインポート)         │   │
-│  │   GET  /api/ports       (シリアルポート一覧)         │   │
-│  │   POST /api/connect     (ポート接続)                 │   │
-│  │   POST /api/disconnect  (ポート切断)                 │   │
+│  │   GET  /api/serial/ports (シリアルポート一覧)       │   │
+│  │   WS: SERIAL_CONNECT / SERIAL_DISCONNECT            │   │
 │  └──────────────────┬──────────────────────────────────┘   │
 │                     │ SerialPort (USB-UART)                 │
 └─────────────────────┼───────────────────────────────────────┘
@@ -150,7 +152,7 @@ WebSocket 接続確立直後に、サーバは `importedRecords ?? recordHistory
 
 ---
 
-## 5. USB PD デコーダ仕様 (pd_parser.js)
+## 5. USB PD デコーダ仕様 (pd_parser.ts)
 
 USB PD Rev 3.2 に準拠したプライマリデコーダ。
 
@@ -164,7 +166,7 @@ GoodCRC, GotoMin, Accept, Reject, Ping, PS_RDY, Get_Source_Cap, Get_Sink_Cap, DR
 
 | メッセージ | #DO | 説明 |
 |---|---|---|
-| Source_Capabilities | 1–8 | ソース PDO 一覧 (Fixed/Variable/Battery/APDO_PPS/APDO_AVS) |
+| Source_Capabilities | 1–8 | ソース PDO 一覧 (Fixed/Variable/Battery/APDO_PPS/APDO_EPR_AVS) |
 | Request / EPR_Request | 1 | シンクからの RDO (Fixed/PPS/AVS レイアウト対応) |
 | BIST | 1 | テストモード |
 | Sink_Capabilities | 1–8 | シンク PDO 一覧 |
@@ -191,7 +193,7 @@ PDO デコードは `isSink` フラグを保持し、Source/Sink どちらの能
 | Variable | vMinMv, vMaxMv, iMa | — |
 | Battery | vMinMv, vMaxMv, wMax | — |
 | APDO_PPS | vMinMv, vMaxMv, iMa, isSink | isSink=true で区別 |
-| APDO_AVS | vMinMv, vMaxMv, pdpW, peakCurrent | Sink は peakCurrent フィールド省略 |
+| APDO_EPR_AVS | vMinMv, vMaxMv, pdpW, peakCurrent | Sink は peakCurrent フィールド省略 |
 | APDO_SPR_AVS | vMinMv, vMaxMv, iMa_9_15, iMa_15_20 | Source 専用 (isSink=false) |
 
 > **Connection View での表示ラベル**:  
@@ -245,7 +247,7 @@ RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正
 | Fixed/Variable | Fixed, Variable, APDO_SPR_AVS | objPos, opCurrent_mA, maxCurrent_mA (GiveBack時は minCurrent_mA), capMismatch, giveBack, eprMode |
 | Battery | Battery | objPos, opPower_mW, limPower_mW (250mW単位), capMismatch, giveBack, eprMode |
 | PPS | APDO_PPS | objPos, opVoltage_mV (20mV/LSB, 12bit), opCurrent_mA (50mA/LSB), capMismatch, eprMode |
-| AVS | APDO_AVS, APDO_SPR_AVS | objPos, opVoltage_mV (25mV/LSB, 12bit), opCurrent_mA (50mA/LSB), capMismatch, eprMode |
+| AVS | APDO_EPR_AVS, APDO_SPR_AVS | objPos, opVoltage_mV (25mV/LSB, 12bit), opCurrent_mA (50mA/LSB), capMismatch, eprMode |
 
 ---
 
@@ -258,6 +260,9 @@ RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正
 | GET | `/api/status` | サーバ稼働確認。`{status, appId, clients}` を返す。`appId` は `'ucpd-monitor-server'` 固定で自己同一性の確認に使用 |
 | GET | `/api/serial/ports` | 利用可能なシリアルポート一覧 (SerialPort.list()) |
 | POST | `/api/import-cpd` | バイナリ `.cpd` データ受信・解析・HISTORY ブロードキャスト |
+| POST | `/api/import-cpd-by-path` | ファイルパス指定のインポート (Electron IPC 経由でパス配列を受取) |
+| POST | `/api/log-unknown` | 未デコードパケットを `logs/unknown_packets.yaml` へ追記 |
+| POST | `/api/ingest` | RAW_FRAME ブロードキャスト（テスト/デバッグ用） |
 | POST | `/api/shutdown` | **開発モードのみ** — プロセスを終了して同一ポートへの新インスタンス起動を可能にする。Electron ビルドでは 403 を返す |
 
 > **注:** シリアルポートの接続・切断・keepalive は WebSocket メッセージで処理する（REST エンドポイントなし）。
@@ -271,13 +276,26 @@ RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正
 | `CPD_RECORD` | `{hex, ts}` | ライブフレーム (1 件) |
 | `HISTORY` | `{records: [{hex,ts}], filename?: string}` | 全履歴リプレイ。インポート時は元ファイル名を含む。filename が付いている場合クライアントは Live ログをフラッシュしてから表示 |
 | `SERIAL_STATUS` | `{connected, port, baudRate}` | 接続状態変化 |
-| `PORT_LIST` | `{ports: [...]}` | ポート一覧変化 (ホットプラグ) |
+| `PORT_LIST` | `{ports: [...]}` | ポート一覧変化 (ホットプラグ) — サーバが 2000ms ごとにパースしてブロードキャスト |
+| `PONG` | — | PING への応答 |
+| `WELCOME` | `{history: [{hex,ts}]}` | 新規 WS 接続時の初期履歴配信 |
+| `MEASURE_SAMPLE` | `{tickMs, vbusMv, ibusMA}` | ADC サンプル 1 件 |
+| `MEASURE_RUNNING` | `{running: boolean}` | 計測実行状態通知 |
+| `MEASURE_ACK` | `{cmd: 'start'簧'stop'}` | MEASURE_START/STOP の応答 |
+| `NOTE_ACK` | `{ok: boolean}` | WRITE_USER_NOTE の応答 |
 
 **クライアント → サーバ**
 
 | type | ペイロード | 説明 |
 |---|---|---|
 | `PING` | — | keepalive |
+| `GET_SERIAL_STATUS` | — | 現在のシリアル接続状態を要求 |
+| `GET_PORT_LIST` | — | 現在のポート一覧を要求 |
+| `SERIAL_CONNECT` | `{port, baudRate}` | 指定ポートへのシリアル接続要求 |
+| `SERIAL_DISCONNECT` | — | 現在のシリアル接続を切断 |
+| `MEASURE_START` | — | ADC 計測ストリーム開始 |
+| `MEASURE_STOP` | — | ADC 計測ストリーム停止 |
+| `WRITE_USER_NOTE` | `{text: string}` | メモテキストを NOTE: ASCII_LOG CPD フレームとしてセッションに書き込む |
 
 ---
 
@@ -287,9 +305,13 @@ RDO デコードは参照先 PDO の種別 (srcPdoType) を引数に取り、正
 
 アプリケーションルート。タイトルバーにパネルトグルボタン・インポートボタン・ステータスバッジを配置。
 
-- `showTopology` / `showConsole` の useState で Connection View/コンソールの表示/非表示をトグル
+- `showTopology` / `showConsole` / `showMemo` / `showMeasure` の useState で各パネルの表示/非表示をトグル
+- `.cpd Open` ボタン: `openLogsFilePicker` — logs フォルダを初期ディレクトリにファイルピッカーを起動 (Electron)
+- `.cpd Import` ボタン: `openImportFilePicker` — 前回使用フォルダを初期ディレクトリにファイルピッカーを起動 (Electron)
 - ドラッグ＆ドロップで `.cpd` ファイルをインポート可能
 - `serialConnected` 時はインポートボタンを無効化
+- `MemoDialog`: モーダルダイアログでワンラインメモを入力し `WRITE_USER_NOTE` WS メッセージでサーバに送信。入力履歴を `memoHistory` に保持
+- `replayNote` 表示: リプレイ中はタイトルバーにインポート元ファイル名を表示
 
 ### 7.2 TopologyView.jsx (Connection View)
 
@@ -313,8 +335,9 @@ USB-PD 接続状態を Connection View として可視化。
     - Fixed: srcPdo.vMv × opCurrent_mA → W 換算
     - PPS/AVS: opVoltage_mV × opCurrent_mA → W 換算
     - Battery: opPower_mW をそのまま W 表示
-  - **SinkSpecBadge** (ノードボックス上部): ベンダー名 / PID / EPR RDY / Cap_Ext / DRD / Alt Mode / VDM / PDP を表示。  
+  - **SinkSpecBadge** (ノードボックス上部): ベンダー名 / PID / EPR_RDY / Cap_Ext / DRP / DRD / Alt Mode / VDM / PDP を表示。  
     Cap_Ext バッジは `sink.skedb`（Sink_Capabilities_Extended の実受信）が存在する場合のみ点灯。RDO の `unchunkedExt` ビットとは独立。  
+    DRP バッジは `Sink_Capabilities` PDO#1 B29 (`dualRolePower`) が `1` の場合に点灯。  
     DRD バッジは `Sink_Capabilities` PDO#1 B25 (`dualRoleData`) が `1` の場合に点灯。  
     Alt Mode バッジは Discover Identity ACK の ID Header VDO B26 (`ModalOperation`) が `1` の場合に点灯。
 - **VBUS / CC ピン**: ASCII_LOG から抽出
@@ -369,7 +392,17 @@ ASCII_LOG フレームのコンソール表示。VBUS・CC ピン状態を含む
 
 ### 7.5 SerialBar.jsx
 
-シリアルポートのドロップダウン選択、ボーレート設定、接続/切断ボタン。ポートリストはホットプラグ対応 (2 秒ポーリング)。
+シリアルポートのドロップダウン選択、ボーレート設定、接続/切断ボタン。ポートリストはサーバからの `PORT_LIST` WebSocket メッセージで更新される（サーバ側が 2000ms おきにポーリングしブロードキャスト）。シリアル接続/切断は `SERIAL_CONNECT` / `SERIAL_DISCONNECT` WS メッセージで実行（REST エンドポイントなし）。
+
+### 7.6 MeasurePanel.jsx
+
+DISCO ボードからの周期的 VBUS/IBUS ADC サンプルを受信・表示するコンポーネント。
+
+- **起動/停止**: Start/Stop ボタンにより `MEASURE_START` / `MEASURE_STOP` WS メッセージを送信
+- **リアルタイム表示**: 最新サンプルの VBUS (mV) / IBUS (mA) をライブリードアウトストリップに表示
+- **サンプルテーブル**: 受信サンプルを時系列で一覧表示
+- **クリア**: Clear ボタンで `measureSamples` をリセット
+- **通信プロトコル**: 外側 TLV tag=0x2C + 内側 tag 0x13 (ファームウェア tick) / 0x0C (VBUS mV + IBUS mA)
 
 ---
 
@@ -379,12 +412,19 @@ Zustand により以下の状態を管理:
 
 ```
 {
-  wsStatus:     'connected' | 'connecting' | 'disconnected' | 'error',
-  serialStatus: { connected, port, baudRate },
-  messages:     ParsedFrame[],      // メッセージ全列
-  topology:     TopologyState,      // トポロジ最新状態
-  importStatus: { loading, done, total, warnings },
-  portList:     SerialPortInfo[],
+  wsStatus:        'connected' | 'connecting' | 'disconnected' | 'error',
+  serialStatus:    { connected, port, baudRate },
+  messages:        ParsedFrame[],      // メッセージ全列
+  topology:        TopologyState,      // トポロジ最新状態
+  importStatus:    { loading, done, total, warnings, filename },
+  serialPorts:     SerialPortInfo[],
+  replayNote:      string | null,      // リプレイ中のインポート元ファイル名
+  memoHistory:     string[],           // メモ入力履歴
+  tsAnchor:        number | null,      // タイムスタンプ封標山
+  measureSamples:  MeasureSample[],    // ADC サンプル列
+  measureRunning:  boolean,            // ADC 計測中フラグ
+  consoleLogs:     string[],           // ASCII_LOG 行列
+  hexDump:         string,             // HEX ドンプバッファ
 }
 ```
 
@@ -400,7 +440,9 @@ Zustand により以下の状態を管理:
 | ATTACHED | `cable.attached = true` |
 | Hard_Reset | PD 状態のみリセット (ケーブル/VBUS 保持) |
 | Soft_Reset | 契約情報のみリセット |
-| Source_Capabilities | source.capabilities, source/sink.connected |
+| PR_Swap | `prSwapPending = true` |
+| Source_Capabilities | source.capabilities、source/sink.connected — PR_Swap 後は source/sink ロール入れ替え |
+| EPR_Source_Capabilities | source.capabilities（chunked EPR caps 累積） |
 | Sink_Capabilities | sink.capabilities |
 | Request/EPR_Request | sink.lastRequest (RDO デコード、PDO タイプ正確推定) |
 | PS_RDY (SRC→SNK) | source.contract 確定 (rdoType/opVoltage_mV/opCurrent_mA/opPower_mW/limPower_mW/giveBack) |
@@ -408,6 +450,7 @@ Zustand により以下の状態を管理:
 | Revision | 送信元の pdRevision を BCD デコード値で更新 |
 | Status (拡張) | source/sink.status (StatusDB フィールド一覧) 更新 |
 | SOP'/SOP'' VDM | eMarker 情報 (ケーブル定格等) 更新 |
+| Source_Capabilities_Extended (SCDB) | source.scdb フィールド一覧更新 → SrcSpecBadge Cap_Ext バッジ点灯 |
 | Sink_Cap_Extended (SKEDB) | sink.skedb フィールド一覧更新 → SinkSpecBadge Cap_Ext バッジ点灯 |
 | Discover Identity ACK (SOP) | 送信元の altMode フラグ更新 (ID Header VDO B26 ModalOperation) → Alt Mode バッジ点灯 |
 
@@ -508,7 +551,8 @@ npm run electron:build
 ```
 /
 ├── electron/
-│   └── main.js               # Electron メインプロセス
+│   ├── main.js               # Electron メインプロセス
+│   └── preload.js            # contextBridge (openFileDialog / openFileDialogFree)
 ├── server/
 │   ├── index.js              # Express + WebSocket + SerialPort サーバ
 │   └── cpdStreamParser.js    # Node.js Transform Stream (CPD フレーム分離)
@@ -522,12 +566,18 @@ npm run electron:build
 │       │   ├── useWebSocket.js
 │       │   └── useCpdImport.js
 │       ├── parsers/
-│       │   └── pd_parser.js  # USB PD Rev3.2 デコーダ
+│       │   ├── pd_parser.ts      # USB PD Rev3.2 デコーダ (TypeScript)
+│       │   ├── pd_types.ts       # 型定義
+│       │   └── pd_parser.test.ts # テスト
+│       ├── data/
+│       │   ├── pdoMeta.ts        # PDO タイプメタデータ (PDO_COLOR / PDO_BADGE)
+│       │   └── pdPeStates.ts     # PE 状態定義
 │       └── components/
 │           ├── TopologyView.jsx / .module.css
 │           ├── MessageTable.jsx / .module.css
 │           ├── Console.jsx / .module.css
-│           └── SerialBar.jsx
+│           ├── MeasurePanel.jsx / .module.css
+│           └── SerialBar.jsx / .module.css
 ├── logs/                      # セッション .cpd + unknown_packets.yaml
 ├── docs/
 │   └── SPEC.md               # 本仕様書

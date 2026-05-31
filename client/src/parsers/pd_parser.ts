@@ -5,6 +5,7 @@ import type {
   Pdo, Rdo, MessageHeader, ExtendedMessageHeader,
   PdMessage, PdFrame, ParsedCpdFile, ParsedPayloadRow, TreeRow, SidoResult,
 } from './pd_types.js';
+import { PE_STATES } from '../data/pdPeStates.js';
 
 /**
  * USB Power Delivery message parser — Rev 3.2 compliant
@@ -61,37 +62,256 @@ export const SOP_TYPES = {
   0b10101: 'SOP_DBG2',
 };
 
-/** Dir byte → human-readable direction label */
-export const CPD_DIR: Record<number, string> = {
-  0x07: 'SRC→SNK',  // Source to Sink
-  0x08: 'SNK→SRC',  // Sink to Source
-  0x06: 'DEBUG',    // ASCII debug/status string
-  0x03: 'EVENT',    // Event marker (SOP' / SOP'' detection)
+/**
+ * TRACE_EVENT byte (offset 0x07) — STM32 USBPD stack TRACE_EVENT enum.
+ * Source: usbpd_core.h  typedef enum { USBPD_TRACE_FORMAT_TLV=0 … } TRACE_EVENT;
+ *
+ * The field was previously called "Dir" in this codebase.  It is the first byte
+ * of the TLV value section and carries the trace-event type, NOT a direction.
+ */
+export const CPD_TRACE_EVENT: Record<number, string> = {
+  0x00: 'FORMAT_TLV',   // USBPD_TRACE_FORMAT_TLV
+  0x01: 'SRC→SNK',      // USBPD_TRACE_MESSAGE_IN  — raw PD frame received by DISCO (SNK mode: SRC→DISCO)
+  0x02: 'SNK→SRC',      // USBPD_TRACE_MESSAGE_OUT — raw PD frame sent by DISCO     (SNK mode: DISCO→SRC)
+  0x03: 'CAD_EVENT',    // USBPD_TRACE_CADEVENT    — Sop = USBPD_CAD_EVENT
+  0x04: 'PE_STATE',     // USBPD_TRACE_PE_STATE    — Sop = PE state index
+  0x05: 'CAD_LOW',      // USBPD_TRACE_CAD_LOW     — Sop = low-level CAD state
+  0x06: 'DEBUG',        // USBPD_TRACE_DEBUG       — payload = ASCII string
+  0x07: 'SRC→SNK',      // USBPD_TRACE_SRC         — raw PD frame from SRC port
+  0x08: 'SNK→SRC',      // USBPD_TRACE_SNK         — raw PD frame from SNK port
+  0x09: 'NOTIF',        // USBPD_TRACE_NOTIF       — Sop = USBPD_NotifyEventValue
+  0x0A: 'POWER',        // USBPD_TRACE_POWER       — power-layer trace
+  0x0B: 'TCPM',         // USBPD_TRACE_TCPM        — Sop = USBPD_TCPM_TRACE
+  0x0C: 'PRL_STATE',    // USBPD_TRACE_PRL_STATE   — Sop = PRL state index
+  0x0D: 'PRL_EVENT',    // USBPD_TRACE_PRL_EVENT   — Sop = PRL event
+  0x0E: 'PHY_NOTFRWD',  // USBPD_TRACE_PHY_NOTFRWD — PHY frame not-forwarded
+  0x0F: 'CPU',          // USBPD_TRACE_CPU
+  0x10: 'TIMEOUT',      // USBPD_TRACE_TIMEOUT     — Sop = timer ID
+  0x12: 'UCSI',         // USBPD_TRACE_UCSI
 };
 
-/** SOP qualifier byte (offset 0x0D) */
+/** Backward-compat alias used inside legacy callers */
+export const CPD_DIR = CPD_TRACE_EVENT;
+
+/** SOP qualifier byte (offset 0x0D) — used when traceEvent is SRC(7) or SNK(8) */
 export const CPD_SOP_QUAL: Record<number, string> = {
   0x00: 'SOP',
   0x01: "SOP'",
   0x02: "SOP''",
 };
 
+// ── Sop-field dictionaries — meaning depends on traceEvent value ──────────
+
 /**
- * EVENT type names derived from sopQual byte.
- * SOP' (0x01) = DETACHED, SOP'' (0x02) = ATTACHED
- * (observed from STM32CubeMonitor-UCPD original display)
+ * CAD events (traceEvent = 0x03 CAD_EVENT).
+ * Sop = USBPD_CAD_EVENT enum  (usbpd_def.h, line ~1100)
  */
-export const CPD_EVENT_NAME: Record<number, string> = {
-  0x01: 'DETACHED',   // SOP' cable plug marker lost
-  0x02: 'ATTACHED',  // SOP'' cable plug marker detected
+export const CPD_CAD_EVENT: Record<number, string> = {
+  0x00: 'NONE',
+  0x01: 'DETACHED',
+  0x02: 'ATTACHED',
+  0x03: 'EMC',
+  0x04: 'ATTEMC',
+  0x05: 'ACCESSORY',
+  0x06: 'DEBUG',
+  0x08: 'VPD',
+  0x09: 'UNKNOWN',
+  0x0A: 'CABLE_ATTACHED',
+  0x0B: 'CABLE_DETACHED',
 };
 
-/** Record type (derived from dir) */
+/** Legacy alias — kept for existing code that uses CPD_EVENT_NAME */
+export const CPD_EVENT_NAME: Record<number, string> = CPD_CAD_EVENT;
+
+/**
+ * PE notification events (traceEvent = 0x09 NOTIF).
+ * Sop = USBPD_NotifyEventValue_TypeDef enum  (usbpd_def.h, line ~1450)
+ */
+export const CPD_NOTIF: Record<number, string> = {
+   1: 'REQUEST_ACCEPTED',
+   2: 'REQUEST_REJECTED',
+   3: 'REQUEST_WAIT',
+   4: 'REQUEST_GOTOMIN',
+   5: 'GETSNKCAP_SENT',
+   6: 'GETSNKCAP_RECEIVED',
+   7: 'GETSNKCAP_ACCEPTED',
+   8: 'GETSNKCAP_REJECTED',
+   9: 'GETSNKCAP_TIMEOUT',
+  10: 'SNKCAP_SENT',
+  11: 'GETSRCCAP_SENT',
+  12: 'GETSRCCAP_RECEIVED',
+  13: 'GETSRCCAP_ACCEPTED',
+  14: 'GETSRCCAP_REJECTED',
+  15: 'SRCCAP_SENT',
+  16: 'POWER_EXPLICIT_CONTRACT',
+  17: 'POWER_SRC_READY',
+  18: 'POWER_SNK_READY',
+  19: 'POWER_SNK_STOP',
+  20: 'POWER_SWAP_TO_SNK_DONE',
+  21: 'POWER_SWAP_TO_SRC_DONE',
+  22: 'POWER_SWAP_REJ',
+  23: 'POWER_SWAP_NOT_SUPPORTED',
+  24: 'RESISTOR_ASSERT_RP',
+  25: 'RESISTOR_ASSERT_RD',
+  26: 'CABLERESET_REQUESTED',
+  27: 'PROTOCOL_ERROR',
+  28: 'VCONN_SWAP_NOT_COMPLETED',
+  30: 'HARDRESET_RX',
+  31: 'HARDRESET_TX',
+  32: 'STATE_SNK_READY',
+  33: 'STATE_SRC_DISABLED',
+  34: 'DATAROLESWAP_SENT',
+  35: 'DATAROLESWAP_RECEIVED',
+  36: 'DATAROLESWAP_UFP',
+  37: 'DATAROLESWAP_DFP',
+  38: 'DATAROLESWAP_WAIT',
+  39: 'DATAROLESWAP_REJECTED',
+  40: 'DATAROLESWAP_NOT_SUPPORTED',
+  41: 'GOTOMIN_SENT',
+  42: 'GOTOMIN_POWERREADY',
+  43: 'SNK_GOTOMIN',
+  44: 'SNK_GOTOMIN_READY',
+  45: 'REQUEST_ERROR',
+  46: 'REQUEST_COMPLETE',
+  47: 'REQUEST_CANCELED',
+  48: 'SOFTRESET_SENT',
+  49: 'SOFTRESET_ACCEPTED',
+  50: 'SOFTRESET_RECEIVED',
+  51: 'PING_RECEIVED',
+  52: 'REQUEST_ENTER_MODE',
+  53: 'REQUEST_ENTER_MODE_ACK',
+  54: 'REQUEST_ENTER_MODE_NAK',
+  55: 'REQUEST_ENTER_MODE_BUSY',
+  56: 'PD_SPECIFICATION_CHANGE',
+  57: 'POWER_SWAP_SENT',
+  58: 'POWER_SWAP_ACCEPTED',
+  59: 'POWER_SWAP_WAIT',
+  60: 'POWER_SWAP_RECEIVED',
+  61: 'VCONN_SWAP_RECEIVED',
+  62: 'VCONN_SWAP_SENT',
+  63: 'VCONN_SWAP_ACCEPTED',
+  64: 'VCONN_SWAP_WAIT',
+  65: 'VCONN_SWAP_REJECTED',
+  66: 'VCONN_SWAP_COMPLETE',
+  67: 'VCONN_SWAP_NOT_SUPPORTED',
+  68: 'CTRL_MSG_SENT',
+  69: 'DATA_MSG_SENT',
+  70: 'GET_SRC_CAP_EXT_RECEIVED',
+  71: 'SRC_CAP_EXT_RECEIVED',
+  72: 'SRC_CAP_EXT_SENT',
+  73: 'GET_PPS_STATUS_RECEIVED',
+  74: 'GET_PPS_STATUS_SENT',
+  75: 'PPS_STATUS_RECEIVED',
+  76: 'PPS_STATUS_SENT',
+  77: 'GET_STATUS_RECEIVED',
+  78: 'STATUS_RECEIVED',
+  79: 'STATUS_SENT',
+  80: 'ALERT_RECEIVED',
+  81: 'VDM_IDENTIFY_RECEIVED',
+  82: 'VDM_CABLE_IDENT_RECEIVED',
+  83: 'VDM_SVID_RECEIVED',
+  84: 'VDM_MODE_RECEIVED',
+  85: 'REQUEST_EXIT_MODE',
+  86: 'REQUEST_EXIT_MODE_ACK',
+  87: 'REQUEST_EXIT_MODE_NAK',
+  88: 'REQUEST_EXIT_MODE_BUSY',
+  89: 'MSG_NOT_SUPPORTED',
+  90: 'POWER_STATE_CHANGE',
+  91: 'REQUEST_DISCARDED',
+  92: 'AMS_INTERRUPTED',
+  93: 'ALERT_SENT',
+  94: 'CABLERESET_TX',
+  95: 'PE_DISABLED',
+  96: 'GET_SNK_CAP_EXT_RECEIVED',
+  97: 'SNK_CAP_EXT_SENT',
+  98: 'SNK_CAP_EXT_RECEIVED',
+  99: 'DETACH',
+  100: 'CABLERESET_RX',
+  101: 'BIST_SHARED_TEST_MODE_ENTRY',
+  102: 'BIST_SHARED_TEST_MODE_EXIT',
+  103: 'STATE_SRC_READY',
+  104: 'USBSTACK_START',
+  105: 'USBSTACK_STOP',
+  106: 'ENTERUSB_INVALID',
+  107: 'ENTERUSB_SENT',
+  108: 'ENTERUSB_ACCEPTED',
+  109: 'ENTERUSB_REJECTED',
+  110: 'DATARESET_EXECUTE',
+  111: 'DATARESET_RESTORE',
+};
+
+/**
+ * TCPM trace sub-types (traceEvent = 0x0B TCPM).
+ * Sop = USBPD_TCPM_TRACE enum  (usbpd_trace.h)
+ */
+export const CPD_TCPM_TRACE: Record<number, string> = {
+   0: 'CORE_ALERT',
+   1: 'ALERT',
+   2: 'ALERT_CLEAR',
+   3: 'ALERT_GET_POWER_STATUS',
+   4: 'ALERT_GET_FAULT_STATUS',
+   5: 'ALERT_SET_FAULT_STATUS',
+   6: 'ALERT_READ_ALERT',
+   7: 'HW_INIT',
+   8: 'SET_CC',
+   9: 'VBUS_GET_VOLTAGE',
+  10: 'VBUS_IS_VSAFE0V',
+  11: 'VBUS_IS_VSAFEEV',
+  12: 'VBUS_ENABLE',
+  13: 'VBUS_DISABLE',
+  14: 'INIT',
+  15: 'DEINIT',
+  16: 'RESET',
+  17: 'SOP_SUPPORTED',
+  18: 'GET_CC',
+  19: 'SET_POLARITY',
+  20: 'SET_VCONN',
+  21: 'SET_MSG_HEADER',
+  22: 'SET_RX_STATE',
+  23: 'SET_GET_MESSAGE',
+  24: 'TRANSMIT',
+  25: 'RESET_REQUEST',
+  26: 'SEND_BIST',
+  27: 'SEND_BIST_PATTERN',
+  28: 'SINK_TXNG',
+  29: 'SINK_TXOK',
+  30: 'SINK_IF_TXOK',
+  31: 'FAST_ROLE_SWAP',
+  32: 'ENABLE_RX',
+  33: 'DISABLE_RX',
+  34: 'SET_PIN_ROLE',
+};
+
+/**
+ * Record category (derived from traceEvent byte).
+ * - 'PD_MSG'    : contains raw USB-PD message bytes → run through parseRawFrame
+ * - 'ASCII_LOG' : payload is a UTF-8/ASCII debug string
+ * - 'CAD_EVENT' : CAD attach/detach event — Sop = USBPD_CAD_EVENT
+ * - 'PE_STATE'  : Policy Engine state transition — Sop = PE state index
+ * - 'NOTIF'     : PE notification — Sop = USBPD_NotifyEventValue
+ * - 'TCPM'      : TCPM layer trace — Sop = USBPD_TCPM_TRACE
+ * - 'PRL'       : Protocol layer state/event — Sop = state/event index
+ * - 'INTERNAL'  : CPU, timeout, PHY, power, format — implementation-internal
+ */
 export const CPD_RECORD_TYPE: Record<number, string> = {
-  0x07: 'PD_MSG',
-  0x08: 'PD_MSG',
-  0x06: 'ASCII_LOG',
-  0x03: 'EVENT',
+  0x00: 'INTERNAL',   // FORMAT_TLV
+  0x01: 'PD_MSG',     // MESSAGE_IN
+  0x02: 'PD_MSG',     // MESSAGE_OUT
+  0x03: 'CAD_EVENT',  // CADEVENT
+  0x04: 'PE_STATE',   // PE_STATE
+  0x05: 'INTERNAL',   // CAD_LOW
+  0x06: 'ASCII_LOG',  // DEBUG
+  0x07: 'PD_MSG',     // SRC→SNK
+  0x08: 'PD_MSG',     // SNK→SRC
+  0x09: 'NOTIF',      // NOTIF
+  0x0A: 'INTERNAL',   // POWER
+  0x0B: 'TCPM',       // TCPM
+  0x0C: 'PRL',        // PRL_STATE
+  0x0D: 'PRL',        // PRL_EVENT
+  0x0E: 'INTERNAL',   // PHY_NOTFRWD
+  0x0F: 'INTERNAL',   // CPU
+  0x10: 'INTERNAL',   // TIMEOUT
+  0x12: 'INTERNAL',   // UCSI
 };
 
 export const MSG_TYPE_CTRL: Record<number, string> = {
@@ -379,6 +599,20 @@ export function collectParseViolations(
     });
   }
 
+  // ── 8. PPS_Status CF/OMF — Current Foldback active ───────────────────────
+  // §6.5.10.3#2 (PD 3.0 OMF bit 2) / §6.5.10 (PD 3.2 CF bit 1).
+  // When either flag is set the source has entered Current Foldback (current
+  // limit) mode, meaning the sink is drawing more than the negotiated current.
+  if (typeName === 'PPS_Status' && dataObjects.length >= 1) {
+    const cf  = (dataObjects[0]! >>> 1) & 0x1;   // bit 1: CF  (PD 3.2)
+    const omf = (dataObjects[0]! >>> 2) & 0x1;   // bit 2: OMF (PD 3.0)
+    if (cf || omf) {
+      violations.push(
+        '⚠ CF/OMF=1: Source in Current Foldback mode — sink may be drawing more than negotiated current (§7.1.4.4)',
+      );
+    }
+  }
+
   return violations;
 }
 
@@ -547,7 +781,7 @@ export function buildPdoSummary(typeName: string, dataObjects: number[], indexOf
   // For EPR types, filter DOs where all value/voltage/current bits are zero.
   // (dw & 0x0FFFFFFF) === 0 covers:
   //   0x00000000 — null-fill Fixed placeholder
-  //   0xD0000000 — APDO_AVS type bits only, all value fields zero (charger bug)
+  //   0xD0000000 — APDO_EPR_AVS type bits only, all value fields zero (charger bug)
   //   0xC0000000 — APDO_PPS type bits only, all value fields zero
   return dataObjects.map((dw, i) => ({ dw, i })).filter(({ dw }) => !(isEpr && (dw & 0x0FFFFFFF) === 0)).map(({ dw, i }) => {
     const pdo = decodePDO(dw, i + indexOffset, isSink);
@@ -561,8 +795,8 @@ export function buildPdoSummary(typeName: string, dataObjects: number[], indexOf
         return `[${n}] Var:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${fmtA(pdo.iMa)}`;
       case 'APDO_PPS':
         return `[${n}] PPS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${fmtA(pdo.iMa)}`;
-      case 'APDO_AVS':
-        return `[${n}] AVS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${pdo.pdpW}W`;
+      case 'APDO_EPR_AVS':
+        return `[${n}] EPR-AVS:${fmtV(pdo.vMinMv)}-${fmtV(pdo.vMaxMv)}/${pdo.pdpW}W`;
       case 'APDO_SPR_AVS': {
         const sfx = pdo.iMa_15_20 > 0
           ? `${fmtA(pdo.iMa_9_15)}│${fmtA(pdo.iMa_15_20)}`
@@ -580,7 +814,7 @@ export function buildPdoSummary(typeName: string, dataObjects: number[], indexOf
  * e.g. "PDO#2  Op:3A  Max:3A  [CapMismatch]"
  *
  * @param {number} dw       Unsigned 32-bit RDO word
- * @param {string} pdoType  Optional source PDO type ('APDO_PPS' | 'APDO_AVS' | others)
+ * @param {string} pdoType  Optional source PDO type ('APDO_PPS' | 'APDO_EPR_AVS' | others)
  * @returns {string}
  */
 export function buildRdoSummary(dw: number, pdoType = 'Fixed'): string {
@@ -777,7 +1011,7 @@ export function decodePDO(dw: number, index: number, isSink = false): Pdo {
     const peakCurrentLabel = isSink ? null : (PEAK_CURRENT_LABEL[peakCurrentRaw] ?? '');
     return {
       ...base,
-      pdoType: 'APDO_AVS',
+      pdoType: 'APDO_EPR_AVS',
       isSink,
       vMaxMv, vMinMv, pdpW,
       peakCurrent,
@@ -825,7 +1059,7 @@ export function decodeSIDO(dw: number): SidoResult {
  *
  * pdoType controls the bit-field interpretation:
  *   'APDO_PPS' — Table 6.22: B19..9 = OutVoltage×20mV, B6..0 = OpCurrent×50mA
- *   'APDO_AVS' — Table 6.35: B19..9 = OutVoltage×25mV, B6..0 = OpCurrent×50mA
+ *   'APDO_EPR_AVS' — Table 6.35: B19..9 = OutVoltage×25mV, B6..0 = OpCurrent×50mA
  *   others     — Table 6.19: B19..10 = OpCurrent×10mA, B9..0 = MaxCurrent×10mA
  *
  * @param {number} dw       Unsigned 32-bit RDO value
@@ -856,14 +1090,14 @@ export function decodeRDO(dw: number, pdoType = 'Fixed'): Rdo {
     };
   }
 
-  if (pdoType === 'APDO_AVS' || pdoType === 'APDO_SPR_AVS') {
+  if (pdoType === 'APDO_EPR_AVS' || pdoType === 'APDO_SPR_AVS') {
     // Table 6.27 — AVS Request Data Object (EPR AVS and SPR AVS both use this format)
     // B27=Rsvd, B26=CapMismatch, B25=UsbComms, B24=NoUsbSuspend, B23=UnchunkedExt, B22=EPRMode
     // B21=Rsvd, B20..9=OutputVoltage/25mV (12 bits, LSB2 shall be zero → effective 100mV step)
     // B8..7=Rsvd, B6..0=OpCurrent/50mA
     const opVoltage_mV = ((dw >>> 9) & 0xFFF) * 25;
     const opCurrent_mA = (dw & 0x7F) * 50;
-    const tag = pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS' : 'AVS';
+    const tag = pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS' : 'EPR-AVS';
     return {
       raw, objPos, capMismatch, usbComms, noUsbSuspend, unchunkedExt, eprMode,
       rdoType: 'AVS',
@@ -919,7 +1153,7 @@ const VDM_CMD_NAMES: Record<number, string> = {
 };
 
 /** Command Type field (bits[7:6] of VDM header lower word) */
-const VDM_CMD_TYPE: Record<number, string> = ['REQ', 'ACK', 'NAK', 'BUSY'];
+const VDM_CMD_TYPE: readonly string[] = ['REQ', 'ACK', 'NAK', 'BUSY'];
 
 /** Well-known SVIDs */
 const VDM_SVID_NAMES: Record<number, string> = {
@@ -1381,7 +1615,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
 
     case 'EPR_Request': {
       // DO[0]: EPR RDO (AVS type); DO[1]: mirror of the selected source EPR PDO (spec Table 6.38)
-      const eprRows: TreeRow[] = [decodeRDO(dataObjects[0]!, srcPdoType ?? 'APDO_AVS')];
+      const eprRows: TreeRow[] = [decodeRDO(dataObjects[0]!, srcPdoType ?? 'APDO_EPR_AVS')];
       const eprMirrorDw = dataObjects[1];
       if (eprMirrorDw !== undefined) eprRows.push({ ...decodePDO(eprMirrorDw, 1), eprMirror: true });
       return eprRows;
@@ -2098,6 +2332,36 @@ export function buildUnknownRecord(frame: Record<string, unknown>, context: stri
   };
 }
 
+/**
+ * Decode a PPS Status Data Object.
+ * USB PD Rev 3.0 Table 6-56 / Rev 3.2 Table 6-57.
+ *
+ * Bit layout:
+ *   31:21  Output Voltage  (20 mV per unit; 0 = no data)
+ *   20:10  Output Current  (50 mA per unit; 0 = no data)
+ *    9: 5  Reserved
+ *    4: 2  PTF[2:0] (PD 3.2) / OMF at bit 2 (PD 3.0)
+ *      1   CF — Current Foldback flag (PD 3.2)
+ *      0   Reserved
+ *
+ * @param dw  32-bit PPS Status Data Object word
+ */
+export function decodePpsStatus(dw: number): ParsedPayloadRow[] {
+  const vRaw = (dw >>> 21) & 0x7FF;   // bits 31:21, 20 mV per unit
+  const iRaw = (dw >>> 10) & 0x7FF;   // bits 20:10, 50 mA per unit
+  const omf  = (dw >>>  2) & 0x1;     // bit 2: OMF (PD 3.0 §6.5.10.3)
+  const cf   = (dw >>>  1) & 0x1;     // bit 1: CF  (PD 3.2 Table 6-57)
+  const vMv  = vRaw * 20;
+  const iMa  = iRaw * 50;
+  const inCL = !!(cf | omf);
+
+  const items: ParsedPayloadRow[] = [];
+  items.push({ label: 'Output Voltage', value: vRaw === 0 ? 'No data' : `${(vMv / 1000).toFixed(3)} V` });
+  items.push({ label: 'Output Current', value: iRaw === 0 ? 'No data' : `${(iMa / 1000).toFixed(2)} A` });
+  items.push({ label: 'Mode (CF/OMF)',  value: inCL ? '⚠ 1 — Current Foldback (CL)' : '0 — Constant Voltage (CV)' });
+  return items;
+}
+
 // ---------- .cpd Binary File Parser ----------
 
 const CPD_SYNC        = 0xFDFDFDFD;
@@ -2185,7 +2449,7 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
         fixedField,
         cat: catByte,
         dir: dirByte,
-        dirName:     CPD_DIR[dirByte]     ?? `0x${dirByte.toString(16)}`,
+        dirName:     CPD_TRACE_EVENT[dirByte] ?? `0x${dirByte.toString(16)}`,
         sopQual,
         sopQualName: CPD_SOP_QUAL[sopQual] ?? `0x${sopQual.toString(16)}`,
         payloadLen,
@@ -2205,11 +2469,32 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
       const ccM   = asciiLog.match(/CC:([\d]+)/);
       if (vbusM) frame['vbusMv'] = parseInt(vbusM[1]!, 10);
       if (ccM)   frame['ccPin']  = parseInt(ccM[1]!,   10);
-    } else if (recordType === 'EVENT') {
-      // dir=0x03, len=0: SOP'/SOP'' detection event marker
-      const eventName   = CPD_EVENT_NAME[sopQual] ?? `EVENT_SOP_0x${sopQual.toString(16)}`;
+    } else if (recordType === 'CAD_EVENT') {
+      // traceEvent=0x03: USBPD_TRACE_CADEVENT — Sop = USBPD_CAD_EVENT enum value
+      const eventName    = CPD_CAD_EVENT[sopQual] ?? `CAD_0x${sopQual.toString(16)}`;
       frame['eventName'] = eventName;
       frame['raw']       = eventName;
+    } else if (recordType === 'PE_STATE') {
+      // traceEvent=0x04: USBPD_TRACE_PE_STATE — Sop = PE state index
+      const peStateName       = PE_STATES[sopQual]?.name ?? `PE_STATE[${sopQual}]`;
+      frame['peStateIndex']   = sopQual;
+      frame['peStateName']    = peStateName;
+      frame['raw']            = peStateName;
+    } else if (recordType === 'NOTIF') {
+      // traceEvent=0x09: USBPD_TRACE_NOTIF — Sop = USBPD_NotifyEventValue
+      const notifName    = CPD_NOTIF[sopQual] ?? `NOTIF_0x${sopQual.toString(16)}`;
+      frame['notifName'] = notifName;
+      frame['raw']       = notifName;
+    } else if (recordType === 'TCPM') {
+      // traceEvent=0x0B: USBPD_TRACE_TCPM — Sop = USBPD_TCPM_TRACE enum value
+      const tcpmName    = CPD_TCPM_TRACE[sopQual] ?? `TCPM_0x${sopQual.toString(16)}`;
+      frame['tcpmName'] = tcpmName;
+      frame['raw']      = tcpmName;
+    } else if (recordType === 'PRL') {
+      // traceEvent=0x0C/0x0D: PRL state or event — Sop = state/event index
+      const prlLabel    = dirByte === 0x0C ? `PRL_STATE[${sopQual}]` : `PRL_EVENT[${sopQual}]`;
+      frame['prlValue'] = sopQual;
+      frame['raw']      = prlLabel;
     } else if (recordType === 'PD_MSG' && payload.length >= 2) {
       // dir=0x07/0x08: USB-PD message
       const headerWord = payload[0]! | (payload[1]! << 8);
@@ -2249,6 +2534,9 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
         frame['parsedPayload'] = parsedPayload;
       } else if (header.typeName === 'Sink_Capabilities_Extended' && payload.length >= doOffset + 21) {
         parsedPayload = decodeSinkCapsExtended(payload.slice(doOffset));
+        frame['parsedPayload'] = parsedPayload;
+      } else if (header.typeName === 'PPS_Status' && dataObjects.length >= 1) {
+        parsedPayload = decodePpsStatus(dataObjects[0]!);
         frame['parsedPayload'] = parsedPayload;
       }
       frame['raw'] = Array.from(payload)
@@ -2305,7 +2593,7 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
         }
       } else if ((header.typeName === 'Request' || header.typeName === 'EPR_Request') && dataObjects.length) {
         // EPR_Request DO[0] is always AVS RDO format (USB PD Rev 3.2 Table 6.38)
-        frame['pdoSummary'] = buildRdoSummary(dataObjects[0]!, header.typeName === 'EPR_Request' ? 'APDO_AVS' : 'Fixed');
+        frame['pdoSummary'] = buildRdoSummary(dataObjects[0]!, header.typeName === 'EPR_Request' ? 'APDO_EPR_AVS' : 'Fixed');
       } else if (header.typeName === 'EPR_Mode' && dataObjects.length) {
         const EPR_ACTION: Record<number, string> = {
           0x01: 'Enter', 0x02: 'Enter Acknowledged', 0x03: 'Enter Succeeded',
@@ -2364,6 +2652,11 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
           const pid    = parsedPayload.find((r) => r.label === 'PID')?.value ?? '?';
           const maxPdp = parsedPayload.find((r) => r.label === 'Sink Maximum PDP')?.value ?? '?';
           frame['pdoSummary'] = `VID:${vid}  PID:${pid}  MaxPDP:${maxPdp}`;
+        } else if (header.typeName === 'PPS_Status' && parsedPayload?.length) {
+          const v    = parsedPayload.find((r) => r.label === 'Output Voltage')?.value ?? '?';
+          const i    = parsedPayload.find((r) => r.label === 'Output Current')?.value ?? '?';
+          const inCL = !!(parsedPayload.find((r) => r.label === 'Mode (CF/OMF)')?.value?.includes('⚠'));
+          frame['pdoSummary'] = `V=${v}  I=${i}${inCL ? '  ⚠ CL' : '  [CV]'}`;
         } else {
           const chunks = extendedHeader.chunked
             ? `Chunk#${extendedHeader.chunkNumber}${extendedHeader.requestChunk ? ' [Req]' : ''}`

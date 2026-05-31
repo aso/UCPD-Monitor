@@ -74,7 +74,21 @@ function createWindow() {
 app.whenReady().then(async () => {
   // Expose writable user-data path to the embedded server (safe in packaged app)
   process.env.UCPD_USER_DATA = app.getPath('userData');
-  await startServer(SERVER_PORT);
+  // Allow displacing a stale dev instance when running in development.
+  if (!app.isPackaged) process.env.UCPD_ALLOW_DISPLACE = '1';
+  try {
+    await startServer(SERVER_PORT);
+  } catch (err) {
+    await dialog.showMessageBox({
+      type: 'error',
+      title: '起動エラー',
+      message: `ポート ${SERVER_PORT} が使用中です。`,
+      detail: '別のインスタンスがすでに起動している可能性があります。\nタスクマネージャーで既存プロセスを終了してから再起動してください。\n\n' + (err?.message ?? String(err)),
+      buttons: ['OK'],
+    });
+    app.quit();
+    return;
+  }
   createWindow();
 
   app.on('activate', () => {

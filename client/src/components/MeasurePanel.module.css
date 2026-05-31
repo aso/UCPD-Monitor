@@ -1,0 +1,185 @@
+/* MeasurePanel.module.css */
+
+.panel {
+  background: #0d1117;
+  border-top: 1px solid #30363d;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 12px;
+  color: #c9d1d9;
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  overflow: hidden;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  flex-shrink: 0;
+}
+
+.title {
+  font-weight: 600;
+  color: #79c0ff;
+  margin-right: 4px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dotActive { background: #3fb950; box-shadow: 0 0 4px #3fb950; }
+.dotIdle   { background: #484f58; }
+
+.btnStart,
+.btnStop,
+.btnClear {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid #30363d;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  transition: opacity 0.15s;
+}
+.btnStart         { background: #1f4829; color: #3fb950; border-color: #238636; }
+.btnStart:hover:not(:disabled) { background: #238636; color: #fff; }
+.btnStop          { background: #3d1f1f; color: #f85149; border-color: #da3633; }
+.btnStop:hover:not(:disabled)  { background: #da3633; color: #fff; }
+.btnClear         { background: #21262d; color: #8b949e; }
+.btnClear:hover   { background: #30363d; color: #c9d1d9; }
+button:disabled   { opacity: 0.38; cursor: default; }
+
+.count {
+  margin-left: auto;
+  color: #8b949e;
+  font-size: 11px;
+}
+
+/* Live readout (latest VBUS / IBUS displayed in toolbar) */
+.liveReadout {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 16px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.liveVbus { color: #e3b341; font-weight: 600; }
+.liveSep  { color: #484f58; }
+.liveIbus { color: #79c0ff; font-weight: 600; }
+
+/* ── Table ──────────────────────────────────────────────────── */
+.tableWrap {
+  overflow-y: auto;
+  overflow-x: auto;
+  flex: 1;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+}
+
+.table thead {
+  position: sticky;
+  top: 0;
+  background: #161b22;
+  z-index: 1;
+}
+
+.thTs {
+  padding: 4px 8px;
+  text-align: left;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.thVal {
+  padding: 4px 10px;
+  text-align: right;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.thTick {
+  padding: 4px 8px;
+  text-align: right;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.thHex {
+  padding: 4px 8px;
+  text-align: left;
+  color: #8b949e;
+  border-bottom: 1px solid #30363d;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.row:nth-child(odd) { background: #0d1117; }
+.row:nth-child(even) { background: #161b22; }
+.row:hover { background: #1c2128; }
+
+.tdTs {
+  padding: 2px 8px;
+  white-space: nowrap;
+  color: #8b949e;
+}
+
+.tdVbus {
+  padding: 2px 10px;
+  text-align: right;
+  white-space: nowrap;
+  color: #e3b341;
+  font-variant-numeric: tabular-nums;
+}
+
+.tdIbus {
+  padding: 2px 10px;
+  text-align: right;
+  white-space: nowrap;
+  color: #79c0ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.tdTick {
+  padding: 2px 8px;
+  text-align: right;
+  white-space: nowrap;
+  color: #6e7681;
+  font-size: 10px;
+}
+
+.tdHex {
+  padding: 2px 8px;
+  color: #6e7681;
+  white-space: nowrap;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+/* ── Empty state ────────────────────────────────────────────── */
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #484f58;
+  padding: 20px;
+}

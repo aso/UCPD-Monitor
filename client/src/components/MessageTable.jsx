@@ -4,9 +4,10 @@ import { useMemo, useState, useCallback, useEffect, useRef, memo, Fragment } fro
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from '../store/appStore';
 import { decodeDataObjects, decodePDO, buildRdoSummary } from '../parsers/pd_parser';
+import { PDO_COLOR, PDO_BADGE } from '../data/pdoMeta';
 import styles from './MessageTable.module.css';
 
-/** Format a millisecond-since-boot uint32 as HH:MM:SS.mmm */
+/** Format a millisecond-since-boot uint32 as HH:MM:SS.mmm (fallback, no anchor) */
 function formatMsTs(ms) {
   const totalSec = Math.floor(ms / 1_000);
   const rem      = ms % 1_000;
@@ -17,6 +18,25 @@ function formatMsTs(ms) {
   return `${hh}:${mm}:${ss}.${frac}`;
 }
 
+/**
+ * Convert a firmware tick (ms-since-boot uint32) to a display string.
+ * With an anchor: shows local wall-clock time (HH:MM:SS.mmm).
+ * Without: falls back to elapsed time since boot.
+ */
+function formatTs(ms, anchor) {
+  if (anchor) {
+    // Signed 32-bit delta to handle uint32 wrap-around (max ~49.7 days)
+    const delta = ((ms - anchor.attachedTick) << 0);  // int32 cast
+    const d = new Date(anchor.wallMs + delta);
+    const hh   = d.getHours()  .toString().padStart(2, '0');
+    const mm   = d.getMinutes().toString().padStart(2, '0');
+    const ss   = d.getSeconds().toString().padStart(2, '0');
+    const frac = d.getMilliseconds().toString().padStart(3, '0');
+    return `${hh}:${mm}:${ss}.${frac}`;
+  }
+  return formatMsTs(ms);
+}
+
 const SOP_QUAL_COLORS = {
   'SOP':    '#4fc3f7',
   "SOP'":   '#81c784',
@@ -24,10 +44,12 @@ const SOP_QUAL_COLORS = {
 };
 
 const DIR_LABELS = {
-  'SRC→SNK': { color: '#ef9a9a', label: 'SRC→SNK', sender: 'SRC', receiver: 'SNK' },
-  'SNK→SRC': { color: '#90caf9', label: 'SNK→SRC', sender: 'SNK', receiver: 'SRC' },
-  'DEBUG':   { color: '#ce93d8', label: 'DEBUG'   },
-  'EVENT':   { color: '#fff176', label: 'EVENT'   },
+  'SRC→SNK':  { color: '#ef9a9a', label: 'SRC→SNK',  sender: 'SRC', receiver: 'SNK' },
+  'SNK→SRC':  { color: '#90caf9', label: 'SNK→SRC',  sender: 'SNK', receiver: 'SRC' },
+  'DEBUG':    { color: '#ce93d8', label: 'DEBUG'   },
+  'CAD_EVENT':{ color: '#fff176', label: 'CAD_EVENT'  },
+  'PE_STATE': { color: '#80deea', label: 'PE_STATE'   },
+  'NOTIF':    { color: '#ffcc80', label: 'NOTIF'      },
 };
 
 const DATA_ROLE_COLORS = {
@@ -35,15 +57,6 @@ const DATA_ROLE_COLORS = {
   'UFP': '#ce93d8',
 };
 
-const PDO_TYPE_COLORS = {
-  'Fixed':        '#80deea',
-  'Battery':      '#ffcc80',
-  'Variable':     '#b39ddb',
-  'APDO_PPS':     '#a5d6a7',
-  'APDO_AVS':     '#f48fb1',
-  'APDO_SPR_AVS': '#ce93d8',
-  'APDO_Unknown': '#aaa',
-};
 
 /** Fixed-PDO capability flags as short tokens */
 function fixedFlags(pdo) {
@@ -68,7 +81,7 @@ function fixedFlags(pdo) {
 
 /** Render the source PDO that was resolved from RDO's objPos */
 function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
-  const typeColor = PDO_TYPE_COLORS[pdo.pdoType] ?? '#aaa';
+  const typeColor = PDO_COLOR[pdo.pdoType] ?? '#aaa';
   const details = [];
 
   if (pdo.pdoType === 'Fixed') {
@@ -86,7 +99,7 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
   } else if (pdo.pdoType === 'APDO_PPS') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
     details.push(`Max:${(pdo.iMa/1000).toFixed(2)} A`);
-  } else if (pdo.pdoType === 'APDO_AVS') {
+  } else if (pdo.pdoType === 'APDO_EPR_AVS') {
     details.push(`${(pdo.vMinMv/1000).toFixed(2)}–${(pdo.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${pdo.pdpW} W`);
   } else if (pdo.pdoType === 'APDO_SPR_AVS') {
@@ -95,10 +108,7 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
     if (pdo.iMa_15_20 > 0) details.push(`${(pdo.iMa_15_20/1000).toFixed(2)} A (15–20V)`);
   }
 
-  const badgeLabel = pdo.pdoType === 'APDO_PPS' ? 'PPS'
-    : pdo.pdoType === 'APDO_AVS' ? 'AVS'
-    : pdo.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
-    : pdo.pdoType;
+  const badgeLabel = PDO_BADGE[pdo.pdoType] ?? pdo.pdoType;
 
   return (
     <tr className={`${styles.resolvedPdoRow} ${isParentSelected ? styles.childRowSelected : ''}`}>
@@ -118,7 +128,7 @@ function ResolvedPdoRow({ pdo, objPos, isParentSelected }) {
 
 /** Render a single PDO child row */
 function PdoRow({ child, isParentSelected, expanded, onToggle, indented }) {
-  const typeColor = PDO_TYPE_COLORS[child.pdoType] ?? '#aaa';
+  const typeColor = PDO_COLOR[child.pdoType] ?? '#aaa';
   const details = [];
 
   if (child.pdoType === 'Fixed') {
@@ -136,7 +146,7 @@ function PdoRow({ child, isParentSelected, expanded, onToggle, indented }) {
   } else if (child.pdoType === 'APDO_PPS') {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${(child.iMa/1000).toFixed(2)} A`);
-  } else if (child.pdoType === 'APDO_AVS') {
+  } else if (child.pdoType === 'APDO_EPR_AVS') {
     details.push(`${(child.vMinMv/1000).toFixed(2)}–${(child.vMaxMv/1000).toFixed(2)} V`);
     details.push(`${child.pdpW} W`);
     if (child.peakCurrentLabel) details.push(child.peakCurrentLabel);
@@ -245,10 +255,7 @@ function PdoRow({ child, isParentSelected, expanded, onToggle, indented }) {
           <>
             {child.pdoType && (
               <span className={styles.pdoTypeBadge} style={{ background: typeColor + '28', borderColor: typeColor, color: typeColor }}>
-                {child.pdoType === 'APDO_PPS' ? 'PPS'
-                  : child.pdoType === 'APDO_AVS' ? 'AVS'
-                  : child.pdoType === 'APDO_SPR_AVS' ? 'SPR-AVS'
-                  : child.pdoType}
+                {PDO_BADGE[child.pdoType] ?? child.pdoType}
               </span>
             )}
             {child.eprMirror
@@ -273,6 +280,7 @@ const MessageRow = memo(function MessageRow({
   msg, resolvedSourcePdo, showRaw, isSelected, expanded, onToggle, onSelect, onContextMenu,
 }) {
   const { header, cpd, recordType } = msg;
+  const tsAnchor = useAppStore((s) => s.tsAnchor);
 
   const isRequest = header?.typeName === 'Request' || header?.typeName === 'EPR_Request';
 
@@ -318,7 +326,7 @@ const MessageRow = memo(function MessageRow({
   const dirInfo  = DIR_LABELS[cpd?.dirName] ?? { color: '#aaa', label: cpd?.dirName ?? '—' };
   const sopColor = SOP_QUAL_COLORS[cpd?.sopQualName] ?? '#aaa';
   const isDebug  = recordType === 'ASCII_LOG';
-  const isEvent  = recordType === 'EVENT';
+  const isEvent  = recordType === 'CAD_EVENT' || recordType === 'PE_STATE' || recordType === 'NOTIF';
 
   const handleClick = useCallback((e) => {
     onSelect(e);
@@ -328,7 +336,7 @@ const MessageRow = memo(function MessageRow({
   return (
     <>
       <tr
-        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''}`}
+        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''} ${header?.typeName === 'Reject' ? styles.rowReject : header?.typeName === 'Wait' ? styles.rowWait : ''}`}
         onClick={handleClick}
         onContextMenu={onContextMenu}
       >
@@ -339,7 +347,7 @@ const MessageRow = memo(function MessageRow({
           {msg.id}
         </td>
         <td className={styles.ts}>
-          {cpd ? formatMsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23)}
+          {cpd ? formatTs(msg.ts, tsAnchor) : new Date(msg.ts).toISOString().substring(11, 23)}
         </td>
         <td style={{ fontWeight: 'bold' }}>
           {dirInfo.sender ? (
@@ -365,7 +373,11 @@ const MessageRow = memo(function MessageRow({
         <td>{header?.specRevision ?? ''}</td>
         <td>{header?.msgId ?? ''}</td>
         <td className={isDebug || isEvent ? styles.special : header?.extended ? styles.ext : header?.isControl ? styles.ctrl : styles.data}>
-          {isDebug ? 'ASCII_LOG' : isEvent ? (msg.eventName ?? 'EVENT') : header?.typeName ?? '—'}
+          {isDebug ? 'ASCII_LOG'
+           : recordType === 'CAD_EVENT' ? (msg.eventName ?? 'EVENT')
+           : recordType === 'PE_STATE'  ? (msg.peStateName ?? `PE_STATE[${msg.peStateIndex ?? '?'}]`)
+           : recordType === 'NOTIF'     ? (msg.notifName ?? 'NOTIF')
+           : header?.typeName ?? '—'}
           {msg.parseViolations?.length > 0 && (
             <span title={msg.parseViolations.join('\n')} style={{ marginLeft: 5, color: '#ffb74d', fontSize: 13, cursor: 'help' }}>⚠</span>
           )}
@@ -381,7 +393,7 @@ const MessageRow = memo(function MessageRow({
                 </span>
                 {resolvedSourcePdo && (
                   <span className={styles.rdoResolvedPdo}>
-                    {' → '}<span style={{ color: PDO_TYPE_COLORS[resolvedSourcePdo.pdo.pdoType] ?? '#aaa' }}>{resolvedSourcePdo.pdo.label}</span>
+                    {' → '}<span style={{ color: PDO_COLOR[resolvedSourcePdo.pdo.pdoType] ?? '#aaa' }}>{resolvedSourcePdo.pdo.label}</span>
                   </span>
                 )}
                 {msg.eprCapable && <span className={styles.eprBadge}>EPR_RDY</span>}
@@ -425,14 +437,16 @@ const MessageRow = memo(function MessageRow({
 });
 
 /** Format one message as a tab-separated line for clipboard copy */
-function formatMsgForCopy(msg) {
-  const ts   = msg.cpd ? formatMsTs(msg.ts) : new Date(msg.ts).toISOString().substring(11, 23);
-  const dir  = msg.cpd?.dirName ?? (msg.recordType === 'EVENT' ? 'EVENT' : 'LOG');
+function formatMsgForCopy(msg, anchor) {
+  const ts   = msg.cpd ? formatTs(msg.ts, anchor) : new Date(msg.ts).toISOString().substring(11, 23);
+  const dir  = msg.cpd?.dirName ?? (msg.recordType === 'CAD_EVENT' ? 'CAD_EVENT' : msg.recordType === 'PE_STATE' ? 'PE_STATE' : msg.recordType === 'NOTIF' ? 'NOTIF' : 'LOG');
   const sop  = msg.cpd?.sopQualName ?? '';
   const rev  = msg.header?.specRevision ?? '';
   const mid  = msg.header?.msgId ?? '';
   const type = msg.recordType === 'ASCII_LOG' ? 'ASCII_LOG'
-             : msg.recordType === 'EVENT'     ? (msg.eventName ?? 'EVENT')
+             : msg.recordType === 'CAD_EVENT' ? (msg.eventName ?? 'CAD_EVENT')
+             : msg.recordType === 'PE_STATE'  ? (msg.peStateName ?? `PE_STATE[${msg.peStateIndex ?? '?'}]`)
+             : msg.recordType === 'NOTIF'     ? (msg.notifName ?? 'NOTIF')
              : (msg.header?.typeName ?? '');
   const ndo  = msg.header?.numDataObjects ?? '';
   const body = msg.pdoSummary ?? msg.raw ?? '';
@@ -498,6 +512,7 @@ function ViolationGuide({ onClose }) {
 export default function MessageTable() {
   const messages      = useAppStore((s) => s.messages);
   const clearMessages = useAppStore((s) => s.clearMessages);
+  const tsAnchor      = useAppStore((s) => s.tsAnchor);
 
   const [newestAtBottom, setNewestAtBottom] = useState(true);
   const [showRaw,        setShowRaw]        = useState(false);
@@ -602,9 +617,9 @@ export default function MessageTable() {
 
   const copySelected = useCallback(() => {
     if (selectedIds.size === 0) return;
-    const text = rows.filter((m) => selectedIds.has(m.id)).map(formatMsgForCopy).join('\n');
+    const text = rows.filter((m) => selectedIds.has(m.id)).map((m) => formatMsgForCopy(m, tsAnchor)).join('\n');
     navigator.clipboard.writeText(text).catch(() => {});
-  }, [selectedIds, rows]);
+  }, [selectedIds, rows, tsAnchor]);
 
   const handleRowClick = useCallback((msg, e) => {
     if (e.shiftKey && anchorId != null) {

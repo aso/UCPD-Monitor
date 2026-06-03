@@ -5,7 +5,20 @@ import type {
   Pdo, Rdo, MessageHeader, ExtendedMessageHeader,
   PdMessage, PdFrame, ParsedCpdFile, ParsedPayloadRow, TreeRow, SidoResult,
 } from './pd_types.js';
-import { PE_STATES } from '../data/pdPeStates.js';
+import {
+  CPD_CAD_EVENT,
+  CPD_DIR,
+  CPD_NOTIF,
+  CPD_RECORD_TYPE,
+  CPD_TRACE_EVENT,
+  CPD_PACKET_DIR,
+  CPD_SOP_QUAL,
+  CPD_TCPM_TRACE,
+  MSG_TYPE_CTRL,
+  MSG_TYPE_DATA,
+  MSG_TYPE_EXT,
+  PE_STATE_OVERRIDES,
+} from '../data/traceLabels.js';
 
 /**
  * USB Power Delivery message parser — Rev 3.2 compliant
@@ -62,323 +75,6 @@ export const SOP_TYPES = {
   0b10101: 'SOP_DBG2',
 };
 
-/**
- * TRACE_EVENT byte (offset 0x07) — STM32 USBPD stack TRACE_EVENT enum.
- * Source: usbpd_core.h  typedef enum { USBPD_TRACE_FORMAT_TLV=0 … } TRACE_EVENT;
- *
- * The field was previously called "Dir" in this codebase.  It is the first byte
- * of the TLV value section and carries the trace-event type, NOT a direction.
- */
-export const CPD_TRACE_EVENT: Record<number, string> = {
-  0x00: 'FORMAT_TLV',   // USBPD_TRACE_FORMAT_TLV
-  0x01: 'SRC→SNK',      // USBPD_TRACE_MESSAGE_IN  — raw PD frame received by DISCO (SNK mode: SRC→DISCO)
-  0x02: 'SNK→SRC',      // USBPD_TRACE_MESSAGE_OUT — raw PD frame sent by DISCO     (SNK mode: DISCO→SRC)
-  0x03: 'CAD_EVENT',    // USBPD_TRACE_CADEVENT    — Sop = USBPD_CAD_EVENT
-  0x04: 'PE_STATE',     // USBPD_TRACE_PE_STATE    — Sop = PE state index
-  0x05: 'CAD_LOW',      // USBPD_TRACE_CAD_LOW     — Sop = low-level CAD state
-  0x06: 'DEBUG',        // USBPD_TRACE_DEBUG       — payload = ASCII string
-  0x07: 'SRC→SNK',      // USBPD_TRACE_SRC         — raw PD frame from SRC port
-  0x08: 'SNK→SRC',      // USBPD_TRACE_SNK         — raw PD frame from SNK port
-  0x09: 'NOTIF',        // USBPD_TRACE_NOTIF       — Sop = USBPD_NotifyEventValue
-  0x0A: 'POWER',        // USBPD_TRACE_POWER       — power-layer trace
-  0x0B: 'TCPM',         // USBPD_TRACE_TCPM        — Sop = USBPD_TCPM_TRACE
-  0x0C: 'PRL_STATE',    // USBPD_TRACE_PRL_STATE   — Sop = PRL state index
-  0x0D: 'PRL_EVENT',    // USBPD_TRACE_PRL_EVENT   — Sop = PRL event
-  0x0E: 'PHY_NOTFRWD',  // USBPD_TRACE_PHY_NOTFRWD — PHY frame not-forwarded
-  0x0F: 'CPU',          // USBPD_TRACE_CPU
-  0x10: 'TIMEOUT',      // USBPD_TRACE_TIMEOUT     — Sop = timer ID
-  0x12: 'UCSI',         // USBPD_TRACE_UCSI
-};
-
-/** Backward-compat alias used inside legacy callers */
-export const CPD_DIR = CPD_TRACE_EVENT;
-
-/** SOP qualifier byte (offset 0x0D) — used when traceEvent is SRC(7) or SNK(8) */
-export const CPD_SOP_QUAL: Record<number, string> = {
-  0x00: 'SOP',
-  0x01: "SOP'",
-  0x02: "SOP''",
-};
-
-// ── Sop-field dictionaries — meaning depends on traceEvent value ──────────
-
-/**
- * CAD events (traceEvent = 0x03 CAD_EVENT).
- * Sop = USBPD_CAD_EVENT enum  (usbpd_def.h, line ~1100)
- */
-export const CPD_CAD_EVENT: Record<number, string> = {
-  0x00: 'NONE',
-  0x01: 'DETACHED',
-  0x02: 'ATTACHED',
-  0x03: 'EMC',
-  0x04: 'ATTEMC',
-  0x05: 'ACCESSORY',
-  0x06: 'DEBUG',
-  0x08: 'VPD',
-  0x09: 'UNKNOWN',
-  0x0A: 'CABLE_ATTACHED',
-  0x0B: 'CABLE_DETACHED',
-};
-
-/** Legacy alias — kept for existing code that uses CPD_EVENT_NAME */
-export const CPD_EVENT_NAME: Record<number, string> = CPD_CAD_EVENT;
-
-/**
- * PE notification events (traceEvent = 0x09 NOTIF).
- * Sop = USBPD_NotifyEventValue_TypeDef enum  (usbpd_def.h, line ~1450)
- */
-export const CPD_NOTIF: Record<number, string> = {
-   1: 'REQUEST_ACCEPTED',
-   2: 'REQUEST_REJECTED',
-   3: 'REQUEST_WAIT',
-   4: 'REQUEST_GOTOMIN',
-   5: 'GETSNKCAP_SENT',
-   6: 'GETSNKCAP_RECEIVED',
-   7: 'GETSNKCAP_ACCEPTED',
-   8: 'GETSNKCAP_REJECTED',
-   9: 'GETSNKCAP_TIMEOUT',
-  10: 'SNKCAP_SENT',
-  11: 'GETSRCCAP_SENT',
-  12: 'GETSRCCAP_RECEIVED',
-  13: 'GETSRCCAP_ACCEPTED',
-  14: 'GETSRCCAP_REJECTED',
-  15: 'SRCCAP_SENT',
-  16: 'POWER_EXPLICIT_CONTRACT',
-  17: 'POWER_SRC_READY',
-  18: 'POWER_SNK_READY',
-  19: 'POWER_SNK_STOP',
-  20: 'POWER_SWAP_TO_SNK_DONE',
-  21: 'POWER_SWAP_TO_SRC_DONE',
-  22: 'POWER_SWAP_REJ',
-  23: 'POWER_SWAP_NOT_SUPPORTED',
-  24: 'RESISTOR_ASSERT_RP',
-  25: 'RESISTOR_ASSERT_RD',
-  26: 'CABLERESET_REQUESTED',
-  27: 'PROTOCOL_ERROR',
-  28: 'VCONN_SWAP_NOT_COMPLETED',
-  30: 'HARDRESET_RX',
-  31: 'HARDRESET_TX',
-  32: 'STATE_SNK_READY',
-  33: 'STATE_SRC_DISABLED',
-  34: 'DATAROLESWAP_SENT',
-  35: 'DATAROLESWAP_RECEIVED',
-  36: 'DATAROLESWAP_UFP',
-  37: 'DATAROLESWAP_DFP',
-  38: 'DATAROLESWAP_WAIT',
-  39: 'DATAROLESWAP_REJECTED',
-  40: 'DATAROLESWAP_NOT_SUPPORTED',
-  41: 'GOTOMIN_SENT',
-  42: 'GOTOMIN_POWERREADY',
-  43: 'SNK_GOTOMIN',
-  44: 'SNK_GOTOMIN_READY',
-  45: 'REQUEST_ERROR',
-  46: 'REQUEST_COMPLETE',
-  47: 'REQUEST_CANCELED',
-  48: 'SOFTRESET_SENT',
-  49: 'SOFTRESET_ACCEPTED',
-  50: 'SOFTRESET_RECEIVED',
-  51: 'PING_RECEIVED',
-  52: 'REQUEST_ENTER_MODE',
-  53: 'REQUEST_ENTER_MODE_ACK',
-  54: 'REQUEST_ENTER_MODE_NAK',
-  55: 'REQUEST_ENTER_MODE_BUSY',
-  56: 'PD_SPECIFICATION_CHANGE',
-  57: 'POWER_SWAP_SENT',
-  58: 'POWER_SWAP_ACCEPTED',
-  59: 'POWER_SWAP_WAIT',
-  60: 'POWER_SWAP_RECEIVED',
-  61: 'VCONN_SWAP_RECEIVED',
-  62: 'VCONN_SWAP_SENT',
-  63: 'VCONN_SWAP_ACCEPTED',
-  64: 'VCONN_SWAP_WAIT',
-  65: 'VCONN_SWAP_REJECTED',
-  66: 'VCONN_SWAP_COMPLETE',
-  67: 'VCONN_SWAP_NOT_SUPPORTED',
-  68: 'CTRL_MSG_SENT',
-  69: 'DATA_MSG_SENT',
-  70: 'GET_SRC_CAP_EXT_RECEIVED',
-  71: 'SRC_CAP_EXT_RECEIVED',
-  72: 'SRC_CAP_EXT_SENT',
-  73: 'GET_PPS_STATUS_RECEIVED',
-  74: 'GET_PPS_STATUS_SENT',
-  75: 'PPS_STATUS_RECEIVED',
-  76: 'PPS_STATUS_SENT',
-  77: 'GET_STATUS_RECEIVED',
-  78: 'STATUS_RECEIVED',
-  79: 'STATUS_SENT',
-  80: 'ALERT_RECEIVED',
-  81: 'VDM_IDENTIFY_RECEIVED',
-  82: 'VDM_CABLE_IDENT_RECEIVED',
-  83: 'VDM_SVID_RECEIVED',
-  84: 'VDM_MODE_RECEIVED',
-  85: 'REQUEST_EXIT_MODE',
-  86: 'REQUEST_EXIT_MODE_ACK',
-  87: 'REQUEST_EXIT_MODE_NAK',
-  88: 'REQUEST_EXIT_MODE_BUSY',
-  89: 'MSG_NOT_SUPPORTED',
-  90: 'POWER_STATE_CHANGE',
-  91: 'REQUEST_DISCARDED',
-  92: 'AMS_INTERRUPTED',
-  93: 'ALERT_SENT',
-  94: 'CABLERESET_TX',
-  95: 'PE_DISABLED',
-  96: 'GET_SNK_CAP_EXT_RECEIVED',
-  97: 'SNK_CAP_EXT_SENT',
-  98: 'SNK_CAP_EXT_RECEIVED',
-  99: 'DETACH',
-  100: 'CABLERESET_RX',
-  101: 'BIST_SHARED_TEST_MODE_ENTRY',
-  102: 'BIST_SHARED_TEST_MODE_EXIT',
-  103: 'STATE_SRC_READY',
-  104: 'USBSTACK_START',
-  105: 'USBSTACK_STOP',
-  106: 'ENTERUSB_INVALID',
-  107: 'ENTERUSB_SENT',
-  108: 'ENTERUSB_ACCEPTED',
-  109: 'ENTERUSB_REJECTED',
-  110: 'DATARESET_EXECUTE',
-  111: 'DATARESET_RESTORE',
-};
-
-/**
- * TCPM trace sub-types (traceEvent = 0x0B TCPM).
- * Sop = USBPD_TCPM_TRACE enum  (usbpd_trace.h)
- */
-export const CPD_TCPM_TRACE: Record<number, string> = {
-   0: 'CORE_ALERT',
-   1: 'ALERT',
-   2: 'ALERT_CLEAR',
-   3: 'ALERT_GET_POWER_STATUS',
-   4: 'ALERT_GET_FAULT_STATUS',
-   5: 'ALERT_SET_FAULT_STATUS',
-   6: 'ALERT_READ_ALERT',
-   7: 'HW_INIT',
-   8: 'SET_CC',
-   9: 'VBUS_GET_VOLTAGE',
-  10: 'VBUS_IS_VSAFE0V',
-  11: 'VBUS_IS_VSAFEEV',
-  12: 'VBUS_ENABLE',
-  13: 'VBUS_DISABLE',
-  14: 'INIT',
-  15: 'DEINIT',
-  16: 'RESET',
-  17: 'SOP_SUPPORTED',
-  18: 'GET_CC',
-  19: 'SET_POLARITY',
-  20: 'SET_VCONN',
-  21: 'SET_MSG_HEADER',
-  22: 'SET_RX_STATE',
-  23: 'SET_GET_MESSAGE',
-  24: 'TRANSMIT',
-  25: 'RESET_REQUEST',
-  26: 'SEND_BIST',
-  27: 'SEND_BIST_PATTERN',
-  28: 'SINK_TXNG',
-  29: 'SINK_TXOK',
-  30: 'SINK_IF_TXOK',
-  31: 'FAST_ROLE_SWAP',
-  32: 'ENABLE_RX',
-  33: 'DISABLE_RX',
-  34: 'SET_PIN_ROLE',
-};
-
-/**
- * Record category (derived from traceEvent byte).
- * - 'PD_MSG'    : contains raw USB-PD message bytes → run through parseRawFrame
- * - 'ASCII_LOG' : payload is a UTF-8/ASCII debug string
- * - 'CAD_EVENT' : CAD attach/detach event — Sop = USBPD_CAD_EVENT
- * - 'PE_STATE'  : Policy Engine state transition — Sop = PE state index
- * - 'NOTIF'     : PE notification — Sop = USBPD_NotifyEventValue
- * - 'TCPM'      : TCPM layer trace — Sop = USBPD_TCPM_TRACE
- * - 'PRL'       : Protocol layer state/event — Sop = state/event index
- * - 'INTERNAL'  : CPU, timeout, PHY, power, format — implementation-internal
- */
-export const CPD_RECORD_TYPE: Record<number, string> = {
-  0x00: 'INTERNAL',   // FORMAT_TLV
-  0x01: 'PD_MSG',     // MESSAGE_IN
-  0x02: 'PD_MSG',     // MESSAGE_OUT
-  0x03: 'CAD_EVENT',  // CADEVENT
-  0x04: 'PE_STATE',   // PE_STATE
-  0x05: 'INTERNAL',   // CAD_LOW
-  0x06: 'ASCII_LOG',  // DEBUG
-  0x07: 'PD_MSG',     // SRC→SNK
-  0x08: 'PD_MSG',     // SNK→SRC
-  0x09: 'NOTIF',      // NOTIF
-  0x0A: 'INTERNAL',   // POWER
-  0x0B: 'TCPM',       // TCPM
-  0x0C: 'PRL',        // PRL_STATE
-  0x0D: 'PRL',        // PRL_EVENT
-  0x0E: 'INTERNAL',   // PHY_NOTFRWD
-  0x0F: 'INTERNAL',   // CPU
-  0x10: 'INTERNAL',   // TIMEOUT
-  0x12: 'INTERNAL',   // UCSI
-};
-
-export const MSG_TYPE_CTRL: Record<number, string> = {
-  0x00: 'Reserved',
-  0x01: 'GoodCRC',
-  0x02: 'GotoMin',
-  0x03: 'Accept',
-  0x04: 'Reject',
-  0x05: 'Ping',
-  0x06: 'PS_RDY',
-  0x07: 'Get_Source_Cap',
-  0x08: 'Get_Sink_Cap',
-  0x09: 'DR_Swap',
-  0x0a: 'PR_Swap',
-  0x0b: 'VCONN_Swap',
-  0x0c: 'Wait',
-  0x0d: 'Soft_Reset',
-  0x0e: 'Data_Reset',
-  0x0f: 'Data_Reset_Complete',
-  0x10: 'Not_Supported',
-  0x11: 'Get_Source_Cap_Extended',
-  0x12: 'Get_Status',
-  0x13: 'FR_Swap',
-  0x14: 'Get_PPS_Status',
-  0x15: 'Get_Country_Codes',
-  0x16: 'Get_Sink_Cap_Extended',
-  0x17: 'Get_Source_Info',
-  0x18: 'Get_Revision',
-};
-
-export const MSG_TYPE_DATA: Record<number, string> = {
-  0x01: 'Source_Capabilities',
-  0x02: 'Request',
-  0x03: 'BIST',
-  0x04: 'Sink_Capabilities',
-  0x05: 'Battery_Status',
-  0x06: 'Alert',
-  0x07: 'Get_Country_Info',
-  0x08: 'Enter_USB',
-  0x09: 'EPR_Request',
-  0x0a: 'EPR_Mode',
-  0x0b: 'Source_Info',
-  0x0c: 'Revision',
-  0x0f: 'Vendor_Defined',
-};
-
-/** Table 6-5 (USB PD Rev 3.2): Extended Message type codes (Extended bit = 1) */
-export const MSG_TYPE_EXT: Record<number, string> = {
-  0x01: 'Source_Capabilities_Extended',
-  0x02: 'Status',
-  0x03: 'Get_Battery_Cap',
-  0x04: 'Get_Battery_Status',
-  0x05: 'Battery_Capabilities',
-  0x06: 'Get_Manufacturer_Info',
-  0x07: 'Manufacturer_Info',
-  0x08: 'Security_Request',
-  0x09: 'Security_Response',
-  0x0a: 'Firmware_Update_Request',
-  0x0b: 'Firmware_Update_Response',
-  0x0c: 'PPS_Status',
-  0x0d: 'Country_Info',
-  0x0e: 'Country_Codes',
-  0x0f: 'Sink_Capabilities_Extended',
-  0x10: 'Extended_Control',
-  0x11: 'EPR_Source_Capabilities',
-  0x12: 'EPR_Sink_Capabilities',
-};
 
 // ---------- Header parser ----------
 
@@ -1708,6 +1404,9 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
         ? `SVID_Cmd_0x${cmd.toString(16).toUpperCase()}`
         : (VDM_CMD_NAMES[cmd] ?? `Rsvd_0x${cmd.toString(16)}`);
       const cmdTypeName = VDM_CMD_TYPE[cmdType];
+      const cmdTypeLabel = cmdTypeName === 'NAK' ? '🚫 NAK'
+        : cmdTypeName === 'BUSY' ? '⏳ BUSY'
+        : cmdTypeName;
 
       // Table 6.33: validate allowed responses per command (monitor only — annotate violations)
       // Enter Mode (0x04): ACK, NAK only.  Exit Mode (0x05): ACK, NAK only.
@@ -1734,7 +1433,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
       }
 
       const headerLabel =
-        `${cmdName} [${cmdTypeName}] — ${fmtSvid(svid)}  ${verStr}${objPosStr}${specViolation}`;
+        `${cmdName} [${cmdTypeLabel}] — ${fmtSvid(svid)}  ${verStr}${objPosStr}${specViolation}`;
 
       const vdos = dataObjects.slice(1);
 
@@ -1780,7 +1479,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
         // §6.4.4.3.3: REQ/NAK/BUSY SHALL NOT contain VDOs.
         decodedVdos = [];
         if (vdos.length > 0) {
-          decodedVdos.push({ label: `⚠ Discover Modes ${cmdTypeName} SHALL NOT contain VDOs — §6.4.4.3.3`, raw: '' });
+          decodedVdos.push({ label: `⚠ Discover Modes ${cmdTypeLabel} SHALL NOT contain VDOs — §6.4.4.3.3`, raw: '' });
           decodedVdos.push(...vdos.map((dw, i) => ({
             label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
             raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
@@ -1794,7 +1493,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
           decodedVdos.push({ label: `⚠ SVID SHALL be PD SID (0xFF00) — §6.4.4.3.2`, raw: '' });
         }
         if (vdos.length > 0) {
-          decodedVdos.push({ label: `⚠ Discover SVIDs ${cmdTypeName} SHALL NOT contain VDOs — §6.4.4.3.2`, raw: '' });
+          decodedVdos.push({ label: `⚠ Discover SVIDs ${cmdTypeLabel} SHALL NOT contain VDOs — §6.4.4.3.2`, raw: '' });
           decodedVdos.push(...vdos.map((dw, i) => ({
             label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
             raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
@@ -1808,7 +1507,7 @@ export function decodeDataObjects(typeName: string, dataObjects: number[], srcPd
           decodedVdos.push({ label: `⚠ SVID SHALL be PD SID (0xFF00) \u2014 §6.4.4.3.1`, raw: '' });
         }
         if (vdos.length > 0) {
-          decodedVdos.push({ label: `⚠ Discover Identity ${cmdTypeName} SHALL NOT contain VDOs \u2014 §6.4.4.3.1`, raw: '' });
+          decodedVdos.push({ label: `⚠ Discover Identity ${cmdTypeLabel} SHALL NOT contain VDOs — §6.4.4.3.1`, raw: '' });
           decodedVdos.push(...vdos.map((dw, i) => ({
             label: `VDO[${i + 1}]: 0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
             raw:   `0x${(dw >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
@@ -2449,7 +2148,9 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
         fixedField,
         cat: catByte,
         dir: dirByte,
-        dirName:     CPD_TRACE_EVENT[dirByte] ?? `0x${dirByte.toString(16)}`,
+        dirName:     recordType === 'PD_MSG'
+          ? (CPD_PACKET_DIR[dirByte] ?? CPD_TRACE_EVENT[dirByte] ?? `0x${dirByte.toString(16)}`)
+          : (CPD_TRACE_EVENT[dirByte] ?? `0x${dirByte.toString(16)}`),
         sopQual,
         sopQualName: CPD_SOP_QUAL[sopQual] ?? `0x${sopQual.toString(16)}`,
         payloadLen,
@@ -2473,28 +2174,29 @@ export function parseCpdFile(buffer: ArrayBuffer): ParsedCpdFile {
       // traceEvent=0x03: USBPD_TRACE_CADEVENT — Sop = USBPD_CAD_EVENT enum value
       const eventName    = CPD_CAD_EVENT[sopQual] ?? `CAD_0x${sopQual.toString(16)}`;
       frame['eventName'] = eventName;
-      frame['raw']       = eventName;
+      frame['raw']       = `0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}`;
     } else if (recordType === 'PE_STATE') {
       // traceEvent=0x04: USBPD_TRACE_PE_STATE — Sop = PE state index
-      const peStateName       = PE_STATES[sopQual]?.name ?? `PE_STATE[${sopQual}]`;
+      const peStateName       = PE_STATE_OVERRIDES[sopQual] ?? `PE_STATE[0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}]`;
       frame['peStateIndex']   = sopQual;
       frame['peStateName']    = peStateName;
-      frame['raw']            = peStateName;
+      frame['raw']            = `0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}`;
     } else if (recordType === 'NOTIF') {
       // traceEvent=0x09: USBPD_TRACE_NOTIF — Sop = USBPD_NotifyEventValue
       const notifName    = CPD_NOTIF[sopQual] ?? `NOTIF_0x${sopQual.toString(16)}`;
       frame['notifName'] = notifName;
-      frame['raw']       = notifName;
+      frame['raw']       = `0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}`;
     } else if (recordType === 'TCPM') {
       // traceEvent=0x0B: USBPD_TRACE_TCPM — Sop = USBPD_TCPM_TRACE enum value
       const tcpmName    = CPD_TCPM_TRACE[sopQual] ?? `TCPM_0x${sopQual.toString(16)}`;
       frame['tcpmName'] = tcpmName;
-      frame['raw']      = tcpmName;
+      frame['raw']      = `0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}`;
     } else if (recordType === 'PRL') {
       // traceEvent=0x0C/0x0D: PRL state or event — Sop = state/event index
       const prlLabel    = dirByte === 0x0C ? `PRL_STATE[${sopQual}]` : `PRL_EVENT[${sopQual}]`;
       frame['prlValue'] = sopQual;
-      frame['raw']      = prlLabel;
+      frame['prlName']  = prlLabel;
+      frame['raw']      = `0x${sopQual.toString(16).toUpperCase().padStart(2, '0')}`;
     } else if (recordType === 'PD_MSG' && payload.length >= 2) {
       // dir=0x07/0x08: USB-PD message
       const headerWord = payload[0]! | (payload[1]! << 8);

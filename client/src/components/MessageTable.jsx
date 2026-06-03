@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAppStore } from '../store/appStore';
 import { decodeDataObjects, decodePDO, buildRdoSummary } from '../parsers/pd_parser';
 import { PDO_COLOR, PDO_BADGE } from '../data/pdoMeta';
+import { buildContractLinks, buildGoodCrcChecks, describeTypeName, formatLinkSummary } from './messageLogLinking';
 import styles from './MessageTable.module.css';
 
 /** Format a millisecond-since-boot uint32 as HH:MM:SS.mmm (fallback, no anchor) */
@@ -56,6 +57,25 @@ const DATA_ROLE_COLORS = {
   'DFP': '#80cbc4',
   'UFP': '#ce93d8',
 };
+
+function formatEventText(msg, showRaw) {
+  if (msg.recordType === 'CAD_EVENT') {
+    return showRaw ? `CAD_EVENT[${msg.raw ?? '?'}]` : (msg.eventName ?? 'CAD_EVENT');
+  }
+  if (msg.recordType === 'PE_STATE') {
+    return showRaw ? `PE_STATE[${msg.raw ?? '?'}]` : (msg.peStateName ?? `PE_STATE[${msg.peStateIndex ?? '?'}]`);
+  }
+  if (msg.recordType === 'NOTIF') {
+    return showRaw ? `NOTIF[${msg.raw ?? '?'}]` : (msg.notifName ?? 'NOTIF');
+  }
+  if (msg.recordType === 'TCPM') {
+    return showRaw ? `TCPM[${msg.raw ?? '?'}]` : (msg.tcpmName ?? 'TCPM');
+  }
+  if (msg.recordType === 'PRL') {
+    return showRaw ? `PRL[${msg.raw ?? '?'}]` : (msg.prlName ?? 'PRL');
+  }
+  return msg.raw ?? '';
+}
 
 
 /** Fixed-PDO capability flags as short tokens */
@@ -277,7 +297,7 @@ function PdoRow({ child, isParentSelected, expanded, onToggle, indented }) {
  * expanded / onToggle are lifted to the parent to survive virtual-scroll unmount.
  */
 const MessageRow = memo(function MessageRow({
-  msg, resolvedSourcePdo, showRaw, isSelected, expanded, onToggle, onSelect, onContextMenu,
+  msg, resolvedSourcePdo, messageLink, goodCrcCheck, showRaw, isSelected, expanded, onToggle, onSelect, onContextMenu,
 }) {
   const { header, cpd, recordType } = msg;
   const tsAnchor = useAppStore((s) => s.tsAnchor);
@@ -326,7 +346,18 @@ const MessageRow = memo(function MessageRow({
   const dirInfo  = DIR_LABELS[cpd?.dirName] ?? { color: '#aaa', label: cpd?.dirName ?? '—' };
   const sopColor = SOP_QUAL_COLORS[cpd?.sopQualName] ?? '#aaa';
   const isDebug  = recordType === 'ASCII_LOG';
-  const isEvent  = recordType === 'CAD_EVENT' || recordType === 'PE_STATE' || recordType === 'NOTIF';
+  const isEvent  = recordType === 'CAD_EVENT' || recordType === 'PE_STATE' || recordType === 'NOTIF' || recordType === 'TCPM' || recordType === 'PRL';
+  const typeInfo  = describeTypeName(header?.typeName);
+  const linkSummary = formatLinkSummary(messageLink);
+  const isVdmNak = header?.typeName === 'Vendor_Defined' && /\[NAK\]/.test(msg.pdoSummary ?? '');
+  const isRejectTone = header?.typeName === 'Reject' || header?.typeName === 'Not_Supported';
+  const isGoodCrcMismatch = header?.typeName === 'GoodCRC' && goodCrcCheck && goodCrcCheck.ok === false;
+  const goodCrcWarnText = isGoodCrcMismatch
+    ? `⚠ MsgID mismatch: expected ${goodCrcCheck.expectedMsgId}, got ${goodCrcCheck.observedMsgId}`
+    : null;
+  const typeText = isDebug ? 'ASCII_LOG'
+    : isEvent ? formatEventText(msg, false)
+    : header?.typeName ?? '—';
 
   const handleClick = useCallback((e) => {
     onSelect(e);
@@ -336,7 +367,7 @@ const MessageRow = memo(function MessageRow({
   return (
     <>
       <tr
-        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''} ${header?.typeName === 'Reject' ? styles.rowReject : header?.typeName === 'Wait' ? styles.rowWait : ''}`}
+        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isDebug ? styles.rowDebug : ''} ${isEvent ? styles.rowEvent : ''} ${hasChildren ? styles.rowExpandable : ''} ${isGoodCrcMismatch ? styles.rowCrcMismatch : isRejectTone ? styles.rowReject : header?.typeName === 'Wait' ? styles.rowWait : isVdmNak ? styles.rowNak : ''}`}
         onClick={handleClick}
         onContextMenu={onContextMenu}
       >
@@ -373,17 +404,17 @@ const MessageRow = memo(function MessageRow({
         <td>{header?.specRevision ?? ''}</td>
         <td>{header?.msgId ?? ''}</td>
         <td className={isDebug || isEvent ? styles.special : header?.extended ? styles.ext : header?.isControl ? styles.ctrl : styles.data}>
-          {isDebug ? 'ASCII_LOG'
-           : recordType === 'CAD_EVENT' ? (msg.eventName ?? 'EVENT')
-           : recordType === 'PE_STATE'  ? (msg.peStateName ?? `PE_STATE[${msg.peStateIndex ?? '?'}]`)
-           : recordType === 'NOTIF'     ? (msg.notifName ?? 'NOTIF')
-           : header?.typeName ?? '—'}
+          <span className={typeInfo.shifted ? styles.responseTypeShift : ''}>{typeText}</span>
+          {!isDebug && !isEvent && typeInfo.label && typeInfo.label !== (header?.typeName ?? '—') && (
+            <span className={styles.typeHint}>{typeInfo.label}</span>
+          )}
+          {goodCrcWarnText && <span className={styles.typeWarn}>{goodCrcWarnText}</span>}
           {msg.parseViolations?.length > 0 && (
             <span title={msg.parseViolations.join('\n')} style={{ marginLeft: 5, color: '#ffb74d', fontSize: 13, cursor: 'help' }}>⚠</span>
           )}
         </td>
         <td>{(header?.numDataObjects ?? 0) > 0 ? header.numDataObjects : ''}</td>
-        <td className={isDebug ? styles.ascii : ((msg.pdoSummary || (header?.typeName === 'Vendor_Defined' && children?.[0]?.label)) && !showRaw) ? styles.pdoSummary : styles.raw}>
+        <td className={isDebug ? styles.ascii : (isEvent ? styles.raw : ((msg.pdoSummary || (header?.typeName === 'Vendor_Defined' && children?.[0]?.label)) && !showRaw) ? styles.pdoSummary : styles.raw)}>
           {(msg.pdoSummary && !showRaw)
             ? <>
                 <span className={styles.pdoSummaryText}>
@@ -396,9 +427,12 @@ const MessageRow = memo(function MessageRow({
                     {' → '}<span style={{ color: PDO_COLOR[resolvedSourcePdo.pdo.pdoType] ?? '#aaa' }}>{resolvedSourcePdo.pdo.label}</span>
                   </span>
                 )}
+                {linkSummary && <span className={styles.linkBadge} title={linkSummary}>{linkSummary}</span>}
                 {msg.eprCapable && <span className={styles.eprBadge}>EPR_RDY</span>}
                 {msg.frsCapable && <span className={styles.fsrBadge}>FSR</span>}
               </>
+            : isEvent
+              ? <span className={styles.pdoSummaryText}>{formatEventText(msg, showRaw)}</span>
             : (header?.typeName === 'Vendor_Defined' && children?.[0]?.label && !showRaw)
               ? <span className={styles.pdoSummaryText}>{children[0].label}</span>
               : (msg.raw ? `DATA:${msg.raw}` : '')}
@@ -439,7 +473,7 @@ const MessageRow = memo(function MessageRow({
 /** Format one message as a tab-separated line for clipboard copy */
 function formatMsgForCopy(msg, anchor) {
   const ts   = msg.cpd ? formatTs(msg.ts, anchor) : new Date(msg.ts).toISOString().substring(11, 23);
-  const dir  = msg.cpd?.dirName ?? (msg.recordType === 'CAD_EVENT' ? 'CAD_EVENT' : msg.recordType === 'PE_STATE' ? 'PE_STATE' : msg.recordType === 'NOTIF' ? 'NOTIF' : 'LOG');
+  const dir  = msg.cpd?.dirName ?? (msg.recordType === 'CAD_EVENT' ? 'CAD_EVENT' : msg.recordType === 'PE_STATE' ? 'PE_STATE' : msg.recordType === 'NOTIF' ? 'NOTIF' : msg.recordType === 'TCPM' ? 'TCPM' : msg.recordType === 'PRL' ? 'PRL' : 'LOG');
   const sop  = msg.cpd?.sopQualName ?? '';
   const rev  = msg.header?.specRevision ?? '';
   const mid  = msg.header?.msgId ?? '';
@@ -447,9 +481,16 @@ function formatMsgForCopy(msg, anchor) {
              : msg.recordType === 'CAD_EVENT' ? (msg.eventName ?? 'CAD_EVENT')
              : msg.recordType === 'PE_STATE'  ? (msg.peStateName ?? `PE_STATE[${msg.peStateIndex ?? '?'}]`)
              : msg.recordType === 'NOTIF'     ? (msg.notifName ?? 'NOTIF')
+             : msg.recordType === 'TCPM'      ? (msg.tcpmName ?? 'TCPM')
+             : msg.recordType === 'PRL'       ? (msg.prlName ?? 'PRL')
              : (msg.header?.typeName ?? '');
   const ndo  = msg.header?.numDataObjects ?? '';
-  const body = msg.pdoSummary ?? msg.raw ?? '';
+  const body = msg.recordType === 'CAD_EVENT' ? (msg.eventName ?? msg.raw ?? '')
+             : msg.recordType === 'PE_STATE'  ? (msg.peStateName ?? msg.raw ?? '')
+             : msg.recordType === 'NOTIF'     ? (msg.notifName ?? msg.raw ?? '')
+             : msg.recordType === 'TCPM'      ? (msg.tcpmName ?? msg.raw ?? '')
+             : msg.recordType === 'PRL'       ? (msg.prlName ?? msg.raw ?? '')
+             : (msg.pdoSummary ?? msg.raw ?? '');
   const raw  = msg.raw ? `DATA:${msg.raw}` : '';
   return [msg.id, ts, dir, sop, rev, mid, type, ndo, body, raw].join('\t');
 }
@@ -583,6 +624,9 @@ export default function MessageTable() {
     }
     return map;
   }, [messages]);
+
+  const contractLinks = useMemo(() => buildContractLinks(messages), [messages]);
+  const goodCrcChecks = useMemo(() => buildGoodCrcChecks(messages), [messages]);
 
   // Estimate height per row for the virtualizer
   const estimateSize = useCallback((i) => {
@@ -758,6 +802,8 @@ export default function MessageTable() {
                     key={msg.id}
                     msg={msg}
                     resolvedSourcePdo={reqToSrcPdo.get(msg.id) ?? null}
+                    messageLink={contractLinks.get(msg.id) ?? null}
+                    goodCrcCheck={goodCrcChecks.get(msg.id) ?? null}
                     showRaw={showRaw}
                     isSelected={selectedIds.has(msg.id)}
                     expanded={expandedIds.has(msg.id)}

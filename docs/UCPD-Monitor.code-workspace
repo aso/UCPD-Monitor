@@ -54,7 +54,12 @@
 			"/^powershell -Command \"Get-Process -Id 48980 \\| Get-ProcessMainWindow\"$/": {
 				"approve": true,
 				"matchCommandLine": true
-			}
+			},
+			"Test-Path": true,
+			"npm exec": true,
+			"npm run build": true,
+			"Get-Process": true,
+			"Get-CimInstance": true
 		}
 	}
 }

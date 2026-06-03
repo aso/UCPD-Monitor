@@ -8,6 +8,7 @@ import {
   parseMessageHeader,
   parseExtendedMsgHeader,
   parseRawFrame,
+  parseCpdFile,
   decodePDO,
   decodeRDO,
   decodeSIDO,
@@ -1117,6 +1118,53 @@ describe('parseRawFrame — Control messages', () => {
 
   it('returns null for too-short frame', () => {
     expect(parseRawFrame('FF', 'STM32')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseCpdFile — PE_STATE firmware aliases
+// ---------------------------------------------------------------------------
+describe('parseCpdFile — PE_STATE firmware aliases', () => {
+  function makeTraceRecord(dirByte: number, sopQual: number, payloadByte: number): ArrayBuffer {
+    const bytes = new Uint8Array(25);
+    bytes.set([0xFD, 0xFD, 0xFD, 0xFD], 0);
+    bytes[4] = 0x32;
+    bytes[5] = 0x00;
+    bytes[6] = 0x0A;
+    bytes[7] = dirByte;
+    bytes[8] = 0x78;
+    bytes[9] = 0x56;
+    bytes[10] = 0x34;
+    bytes[11] = 0x12;
+    bytes[12] = 0x00;
+    bytes[13] = sopQual;
+    bytes[14] = 0x00;
+    bytes[15] = 0x01;
+    bytes[16] = payloadByte;
+    bytes[17] = 0xA5;
+    bytes[18] = 0xA5;
+    bytes[19] = 0xA5;
+    bytes[20] = 0xA5;
+    return bytes.buffer;
+  }
+
+  it('maps 0x43/0x44/0x45 to firmware-style PE state labels', () => {
+    const frame43 = parseCpdFile(makeTraceRecord(0x04, 0x43, 0x43)).frames[0] as any;
+    const frame44 = parseCpdFile(makeTraceRecord(0x04, 0x44, 0x44)).frames[0] as any;
+    const frame45 = parseCpdFile(makeTraceRecord(0x04, 0x45, 0x45)).frames[0] as any;
+
+    expect(frame43.recordType).toBe('PE_STATE');
+    expect(frame43.peStateName).toBe('PE_SNK_WAIT_FOR_CAPABILITIES');
+    expect(frame44.peStateName).toBe('PE_SNK_EVALUATE_CAPABILITY');
+    expect(frame45.peStateName).toBe('PE_SNK_SEND_REQUEST');
+    expect(frame44.raw).toBe('0x44');
+    expect(frame45.raw).toBe('0x45');
+  });
+
+  it('does not fall back to spec table for unknown firmware PE values', () => {
+    const unknown = parseCpdFile(makeTraceRecord(0x04, 0x5A, 0x5A)).frames[0] as any;
+    expect(unknown.recordType).toBe('PE_STATE');
+    expect(unknown.peStateName).toBe('PE_STATE[0x5A]');
   });
 });
 

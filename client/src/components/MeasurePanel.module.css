@@ -149,6 +149,29 @@ button:disabled {
   min-width: 0;
 }
 
+.meterCardInactive {
+  border-color: #1f2732;
+  background: linear-gradient(180deg, #0f141b 0%, #0b1016 100%);
+}
+
+.meterCardInactive .meterLabel {
+  color: #5c6570;
+}
+
+.meterCardInactive .meterPercent {
+  color: #545d68;
+}
+
+.meterCardInactive .meterValueV,
+.meterCardInactive .meterValueI {
+  color: #76808d;
+  text-shadow: none;
+}
+
+.meterCardInactive .meterRange {
+  color: #59626d;
+}
+
 .meterHead {
   display: flex;
   justify-content: space-between;
@@ -194,6 +217,11 @@ button:disabled {
   overflow: hidden;
 }
 
+.meterTrackInactive {
+  background: #070a0f;
+  border-color: #1b232f;
+}
+
 .meterFillV,
 .meterFillI {
   height: 100%;
@@ -205,8 +233,16 @@ button:disabled {
   background: linear-gradient(90deg, #856205 0%, #c9971a 45%, #f1be3a 100%);
 }
 
+.meterFillVInactive {
+  background: linear-gradient(90deg, #2a2415 0%, #3b3422 45%, #4a412b 100%);
+}
+
 .meterFillI {
   background: linear-gradient(90deg, #125189 0%, #1f74c9 45%, #57a7ff 100%);
+}
+
+.meterFillIInactive {
+  background: linear-gradient(90deg, #1a2734 0%, #223546 45%, #2c4358 100%);
 }
 
 .meterRange {

@@ -1,7 +1,7 @@
 # UCPD-Monitor アプリケーション仕様書
 
-バージョン: 3.2.6  
-更新日: 2026-05-31
+バージョン: 3.2.7  
+更新日: 2026-06-03
 
 ---
 
@@ -25,7 +25,7 @@
 | セッション保存 | ライブデータを自動的にタイムスタンプ付き `.cpd` ファイルへ保存。アプリ終了時にシリアルポート自動切断・ファイルフラッシュ |
 | 不明パケットログ | パース不能フレームを `logs/unknown_packets.yaml` へ記録 |
 | メモ注記 | ライブセッション中にワンライン・メモを `.cpd` ログに書き込む。再生時にタイトルバーに自動表示 |
-| ADC 計測ストリーム | DISCO ボードからの周期的 VBUS/IBUS サンプルをリアルタイム表示。MEASURE_START/STOP コマンドで制御 |
+| ADC 計測ストリーム | DISCO ボードからの周期的 VBUS/IBUS サンプルをリアルタイム表示。メーターはスケール端をレンジ表示し、観測 min/max は FW Tick 行へ表示。MEASURE_START/STOP コマンドで制御 |
 
 ---
 
@@ -371,7 +371,7 @@ USB-PD 接続状態を Connection View として可視化。
   - コピー書式: `#id \t Timestamp \t Dir \t SOP \t Rev \t MsgID \t Type \t #DO \t Parsed \t DATA:HEXRAW`
   - パース済サマリがない場合、本文カラムは `DATA:HEX...` 形式で表示
 - **スクロール**: ユーザーが手動スクロールすると自動スクロール停止。フローティング「最新へ」ボタンで再開
-- **HEX ⇄ Parsed トグル**: 本文カラムをパース済テキスト/生 HEX で切替
+- **HEX ⇄ Parsed トグル**: 本文カラムをパース済テキスト/生 HEX で切替。PD メッセージ行に加え、`PE_STATE` / `NOTIF` / `TCPM` / `PRL` などのイベント本文行にも適用。Type 列は切替の影響を受けず固定表示
 - **拡張メッセージツリー**: `parsedPayload` システムにより、Source_Capabilities_Extended (SCEDB) と Status (SDB) はキー・バリュー行としてツリー展開。EPR_Source/Sink_Capabilities は通常 PDO ツリーと同様に展開
 - **VDM 2段階ツリー展開**: Discover Identity ACK 展開時、VDO ごとのセクションヘッダー (`ID HEADER`, `CERT STAT`, `PRODUCT`, `UFP VDO` …) を折り畳み行として表示。▸ / ▾ エキスパンダーをクリックして各セクションのフィールド行を個別に開閉可能。展開フィールド行はセクションより 24px インデントした `└` 記号付きで表示
 - **EPR_Mode アクションバッジ**: Enter=緑、Acknowledged=水色、Succeeded=青、Failed=赤、Exit=グレー で色分け
@@ -399,8 +399,11 @@ ASCII_LOG フレームのコンソール表示。VBUS・CC ピン状態を含む
 DISCO ボードからの周期的 VBUS/IBUS ADC サンプルを受信・表示するコンポーネント。
 
 - **起動/停止**: Start/Stop ボタンにより `MEASURE_START` / `MEASURE_STOP` WS メッセージを送信
-- **リアルタイム表示**: 最新サンプルの VBUS (mV) / IBUS (mA) をライブリードアウトストリップに表示
-- **サンプルテーブル**: 受信サンプルを時系列で一覧表示
+- **リアルタイム表示**: 最新サンプルの VBUS (mV) / IBUS (mA) をメーターカードで表示
+- **レンジ表示**: メーターのレンジ表示は観測レンジではなくスケール端（`0 .. measureScale.vbusMaxMv`、`0 .. measureScale.ibusMaxMa`）を使用
+- **観測レンジ表示**: 直近観測の min/max は FW Tick メタ情報行に表示
+- **アクティブ状態表現**: `measureRunning && measureMonitor.phase === 'streaming'` のときのみ Active 表示。非稼働時はメーターカード、バー、数値フォントをダーク化
+- **独立表示制御**: ADC Stream パネル表示と Console パネル表示は連動しない
 - **クリア**: Clear ボタンで `measureSamples` をリセット
 - **通信プロトコル**: 外側 TLV tag=0x2C + 内側 tag 0x13 (ファームウェア tick) / 0x0C (VBUS mV + IBUS mA)
 

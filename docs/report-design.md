@@ -1,6 +1,6 @@
 # USB PD テストレポート出力 — デザイン資料
 
-**対象バージョン:** UCPD-Monitor v3.2.6+  
+**対象バージョン:** UCPD-Monitor v3.2.7+  
 **参照規格:** USB Power Delivery Rev 3.2 V1.2 (USB-IF, 2023-10)  
 **作成日:** 2026-04-19
 

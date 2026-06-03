@@ -4,6 +4,50 @@ All notable changes to UCPD-Monitor are documented here.
 
 ---
 
+## [3.2.7] - 2026-06-03
+
+### Added
+
+#### Trace label resource separation (`client/src/data/traceLabels.ts`)
+
+- Added a centralized trace label resource module for parser/display dictionaries.
+- Separated display-facing trace labels from parser direction semantics via `CPD_PACKET_DIR`.
+
+### Changed
+
+#### PE_STATE decode alignment with firmware trace vocabulary (`client/src/parsers/pd_parser.ts`)
+
+- Updated PE state mapping to match STM32 firmware/XML trace aliases.
+- Unknown PE values now fall back to `PE_STATE[0x..]` without speculative names.
+
+#### Message table HEX/Parsed behavior for event rows (`client/src/components/MessageTable.jsx`)
+
+- Extended HEX/Parsed toggle scope from PD messages to event payload rows (`PE_STATE`, `NOTIF`, `TCPM`, `PRL`).
+- Kept the Type column stable across HEX/Parsed toggle.
+
+#### ADC Stream meter semantics and inactive rendering (`client/src/components/MeasurePanel.jsx`, `client/src/components/MeasurePanel.module.css`)
+
+- Meter range labels now show scale endpoints (0 to current scale max) instead of recent observed min/max.
+- Recent observed min/max moved to the FW Tick metadata line.
+- Non-streaming state now dims the entire meter card including value fonts and bars.
+
+#### Documentation synchronization for 3.2.7 (`README.md`, `README.ja.md`, `docs/SPEC.md`, `docs/sources/*`)
+
+- Synchronized EN/JA README and SPEC with current MessageTable/MeasurePanel behavior.
+- Added/updated source-level docs under `docs/sources` and unified them to Japanese-first descriptions.
+
+### Fixed
+
+#### Panel linkage behavior (`client/src/App.jsx`, `client/src/components/MeasurePanel.jsx`)
+
+- Removed forced Console opening when ADC Stream panel is opened.
+
+#### Parser import regression (`client/src/parsers/pd_parser.ts`)
+
+- Restored missing trace label import to keep parser tests/build stable.
+
+---
+
 ## [3.2.6] - 2026-05-31
 
 ### Added

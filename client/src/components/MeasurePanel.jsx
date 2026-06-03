@@ -45,7 +45,7 @@ function clamp01(v) {
  * Props:
  *   sendMessage(obj)  — WebSocket send function from useWebSocket()
  */
-export default function MeasurePanel({ sendMessage, onShowConsole }) {
+export default function MeasurePanel({ sendMessage }) {
   const samples         = useAppStore((s) => s.measureSamples);
   const running         = useAppStore((s) => s.measureRunning);
   const monitor         = useAppStore((s) => s.measureMonitor);
@@ -75,6 +75,10 @@ export default function MeasurePanel({ sendMessage, onShowConsole }) {
   const ibusRecentMax = recent.length > 0 ? Math.max(...recent.map((s) => s.ibusMa ?? 0)) : null;
   const ibusRecentMin = recent.length > 0 ? Math.min(...recent.map((s) => s.ibusMa ?? 0)) : null;
 
+  const vbusScaleMinMv = 0;
+  const ibusScaleMinMa = 0;
+  const isMeterActive = running && monitor.phase === 'streaming';
+
   const ackTimerRef = useRef(null);
   const sampleTimerRef = useRef(null);
   const spyWarnedRef = useRef(false);
@@ -86,7 +90,6 @@ export default function MeasurePanel({ sendMessage, onShowConsole }) {
       setMeasureMonitor({ phase: 'idle', lastError: null });
       return;
     }
-    onShowConsole?.();
     const now = Date.now();
     setMeasureMonitor({
       phase: 'awaiting-ack',
@@ -96,7 +99,7 @@ export default function MeasurePanel({ sendMessage, onShowConsole }) {
     });
     appendLog('[Measure] Start command sent — waiting for FW ACK');
     sendMessage({ type: 'MEASURE_START' });
-  }, [appendLog, isSpyMode, onShowConsole, sendMessage, setMeasureMonitor]);
+  }, [appendLog, isSpyMode, sendMessage, setMeasureMonitor]);
 
   const handleStop = useCallback(() => {
     const now = Date.now();
@@ -209,39 +212,53 @@ export default function MeasurePanel({ sendMessage, onShowConsole }) {
       {samples.length > 0 && latest && (
         <div className={styles.meterWrap}>
           <div className={styles.meterGrid}>
-            <section className={styles.meterCard}>
+            <section className={`${styles.meterCard} ${!isMeterActive ? styles.meterCardInactive : ''}`}>
               <div className={styles.meterHead}>
                 <span className={styles.meterLabel}>VBUS</span>
                 <span className={styles.meterPercent}>{(vbusRatio * 100).toFixed(1)}%</span>
               </div>
               <div className={styles.meterValueV}>{fmtV(vbusNow)}</div>
-              <div className={styles.meterTrack}>
-                <div className={styles.meterFillV} style={{ width: `${(vbusRatio * 100).toFixed(1)}%` }} />
+              <div className={`${styles.meterTrack} ${!isMeterActive ? styles.meterTrackInactive : ''}`}>
+                <div
+                  className={isMeterActive ? styles.meterFillV : styles.meterFillVInactive}
+                  style={{ width: `${(vbusRatio * 100).toFixed(1)}%` }}
+                />
               </div>
               <div className={styles.meterRange}>
-                <span>min {fmtV(vbusRecentMin)}</span>
-                <span>max {fmtV(vbusRecentMax)}</span>
+                <span>{fmtV(vbusScaleMinMv)}</span>
+                <span>{fmtV(maxVbusMv)}</span>
               </div>
             </section>
 
-            <section className={styles.meterCard}>
+            <section className={`${styles.meterCard} ${!isMeterActive ? styles.meterCardInactive : ''}`}>
               <div className={styles.meterHead}>
                 <span className={styles.meterLabel}>IBUS</span>
                 <span className={styles.meterPercent}>{(ibusRatio * 100).toFixed(1)}%</span>
               </div>
               <div className={styles.meterValueI}>{fmtA(ibusNow)}</div>
-              <div className={styles.meterTrack}>
-                <div className={styles.meterFillI} style={{ width: `${(ibusRatio * 100).toFixed(1)}%` }} />
+              <div className={`${styles.meterTrack} ${!isMeterActive ? styles.meterTrackInactive : ''}`}>
+                <div
+                  className={isMeterActive ? styles.meterFillI : styles.meterFillIInactive}
+                  style={{ width: `${(ibusRatio * 100).toFixed(1)}%` }}
+                />
               </div>
               <div className={styles.meterRange}>
-                <span>min {fmtA(ibusRecentMin)}</span>
-                <span>max {fmtA(ibusRecentMax)}</span>
+                <span>{fmtA(ibusScaleMinMa)}</span>
+                <span>{fmtA(maxIbusMa)}</span>
               </div>
             </section>
           </div>
 
           <div className={styles.metaRow}>
-            <span>FW Tick: {latest.firmwareTick ?? '—'}</span>
+            <span>
+              FW Tick: {latest.firmwareTick ?? '—'}
+              {recent.length > 0 && (
+                <>
+                  {' '}| Observed VBUS min/max: {fmtV(vbusRecentMin)} / {fmtV(vbusRecentMax)}
+                  {' '}| Observed IBUS min/max: {fmtA(ibusRecentMin)} / {fmtA(ibusRecentMax)}
+                </>
+              )}
+            </span>
             <span>Last Update: {fmtTs(latest.ts)}</span>
           </div>
         </div>
